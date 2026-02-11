@@ -112,12 +112,11 @@ pub struct Scanner {
 impl Scanner {
     /// Create a new scanner from a lockfile path and database.
     pub fn new(lockfile_path: &Path, database: Database) -> Result<Self, ScanError> {
-        let content = std::fs::read_to_string(lockfile_path).map_err(|_| {
-            ScanError::LockfileNotFound(lockfile_path.display().to_string())
-        })?;
+        let content = std::fs::read_to_string(lockfile_path)
+            .map_err(|_| ScanError::LockfileNotFound(lockfile_path.display().to_string()))?;
 
-        let lockfile = lockfile::parse(&content)
-            .map_err(|e| ScanError::LockfileParse(e.to_string()))?;
+        let lockfile =
+            lockfile::parse(&content).map_err(|e| ScanError::LockfileParse(e.to_string()))?;
 
         Ok(Scanner { lockfile, database })
     }
@@ -145,17 +144,14 @@ impl Scanner {
         for source in &self.lockfile.sources {
             match source {
                 Source::Git(git) => {
-                    if is_insecure_uri(&git.remote) && !is_internal_source(&git.remote)
-                    {
+                    if is_insecure_uri(&git.remote) && !is_internal_source(&git.remote) {
                         results.push(InsecureSource {
                             source: git.remote.clone(),
                         });
                     }
                 }
                 Source::Rubygems(gem) => {
-                    if gem.remote.starts_with("http://")
-                        && !is_internal_source(&gem.remote)
-                    {
+                    if gem.remote.starts_with("http://") && !is_internal_source(&gem.remote) {
                         results.push(InsecureSource {
                             source: gem.remote.clone(),
                         });
@@ -193,8 +189,7 @@ impl Scanner {
             for advisory in advisories {
                 // Check if any of the advisory's identifiers are in the ignore list
                 if !options.ignore.is_empty() {
-                    let identifiers: HashSet<String> =
-                        advisory.identifiers().into_iter().collect();
+                    let identifiers: HashSet<String> = advisory.identifiers().into_iter().collect();
                     if !options.ignore.is_disjoint(&identifiers) {
                         continue;
                     }
@@ -240,11 +235,9 @@ fn ipv4_in_cidr(addr: Ipv4Addr, network: Ipv4Addr, prefix_len: u32) -> bool {
 /// Check if an IP address is internal/private.
 fn is_internal_ip(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => {
-            INTERNAL_IPV4_RANGES
-                .iter()
-                .any(|(net, prefix)| ipv4_in_cidr(v4, *net, *prefix))
-        }
+        IpAddr::V4(v4) => INTERNAL_IPV4_RANGES
+            .iter()
+            .any(|(net, prefix)| ipv4_in_cidr(v4, *net, *prefix)),
         IpAddr::V6(v6) => {
             // ::1 (loopback)
             v6 == Ipv6Addr::LOCALHOST
@@ -462,7 +455,10 @@ mod tests {
         let scanner = Scanner::from_lockfile(lockfile, db);
 
         let insecure = scanner.scan_sources();
-        assert!(insecure.is_empty(), "secure lockfile should have no insecure sources");
+        assert!(
+            insecure.is_empty(),
+            "secure lockfile should have no insecure sources"
+        );
     }
 
     #[test]

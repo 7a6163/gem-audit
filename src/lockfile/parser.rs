@@ -57,7 +57,14 @@ pub fn parse(input: &str) -> Result<Lockfile, ParseError> {
                 specs.push(spec);
             }
             // Finalize any in-progress source
-            finalize_source(&section, &mut sources, &mut current_remote, &mut current_revision, &mut current_branch, &mut current_tag);
+            finalize_source(
+                &section,
+                &mut sources,
+                &mut current_remote,
+                &mut current_revision,
+                &mut current_branch,
+                &mut current_tag,
+            );
 
             in_specs = false;
             section = match trimmed {
@@ -117,7 +124,14 @@ pub fn parse(input: &str) -> Result<Lockfile, ParseError> {
     if let Some(spec) = current_spec.take() {
         specs.push(spec);
     }
-    finalize_source(&section, &mut sources, &mut current_remote, &mut current_revision, &mut current_branch, &mut current_tag);
+    finalize_source(
+        &section,
+        &mut sources,
+        &mut current_remote,
+        &mut current_revision,
+        &mut current_branch,
+        &mut current_tag,
+    );
 
     if sources.is_empty() && specs.is_empty() {
         return Err(ParseError::Empty);
@@ -296,10 +310,7 @@ fn parse_version_platform(input: &str) -> (String, Option<String>) {
             || after.contains("linux")
             || after.contains("darwin")
         {
-            return (
-                input[..pos].to_string(),
-                Some(after.to_string()),
-            );
+            return (input[..pos].to_string(), Some(after.to_string()));
         }
     }
 
@@ -418,7 +429,10 @@ mod tests {
         let nokogiri_specs = lockfile.find_specs("nokogiri");
         assert_eq!(nokogiri_specs.len(), 2);
 
-        let nokogiri_plain = nokogiri_specs.iter().find(|s| s.platform.is_none()).unwrap();
+        let nokogiri_plain = nokogiri_specs
+            .iter()
+            .find(|s| s.platform.is_none())
+            .unwrap();
         assert_eq!(nokogiri_plain.version, "1.13.10");
         assert_eq!(nokogiri_plain.dependencies.len(), 2);
 

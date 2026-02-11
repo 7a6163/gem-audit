@@ -128,7 +128,9 @@ impl Version {
     ///
     /// A version is pre-release if any of its segments is a string.
     pub fn is_prerelease(&self) -> bool {
-        self.segments.iter().any(|s| matches!(s, Segment::String(_)))
+        self.segments
+            .iter()
+            .any(|s| matches!(s, Segment::String(_)))
     }
 
     /// Bump this version: drop the last segment and increment the new last segment.
@@ -289,7 +291,11 @@ mod tests {
         let v = Version::parse("1.2.3").unwrap();
         assert_eq!(
             v.segments,
-            vec![Segment::Numeric(1), Segment::Numeric(2), Segment::Numeric(3)]
+            vec![
+                Segment::Numeric(1),
+                Segment::Numeric(2),
+                Segment::Numeric(3)
+            ]
         );
     }
 
@@ -304,7 +310,11 @@ mod tests {
         let v = Version::parse("01.02.03").unwrap();
         assert_eq!(
             v.segments,
-            vec![Segment::Numeric(1), Segment::Numeric(2), Segment::Numeric(3)]
+            vec![
+                Segment::Numeric(1),
+                Segment::Numeric(2),
+                Segment::Numeric(3)
+            ]
         );
     }
 

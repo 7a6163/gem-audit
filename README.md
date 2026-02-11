@@ -134,6 +134,23 @@ $ bundler-audit check --config custom-audit.yml
 
 CLI `--ignore` flags take precedence over the configuration file.
 
+## Performance
+
+Benchmarked with [hyperfine] on Apple M-series, comparing against Ruby bundler-audit 0.9.2:
+
+| Benchmark | Rust | Ruby | Speedup |
+|-----------|------|------|---------|
+| check (unpatched gems) | 9.9 ms | 229.9 ms | **23x** |
+| check (secure, no vulns) | 17.9 ms | 262.5 ms | **15x** |
+| check --format json | 10.3 ms | 231.3 ms | **23x** |
+| startup (version) | 6.8 ms | 198.4 ms | **29x** |
+
+Run the benchmark yourself:
+
+```
+$ ./benchmarks/bench.sh
+```
+
 ## Compatibility
 
 This is a compatible reimplementation of [bundler-audit] v0.9.x in Rust.
@@ -168,22 +185,10 @@ src/
 
 ## License
 
-Copyright (c) 2026 Zac
-
-bundler-audit-rs is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-bundler-audit-rs is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with bundler-audit-rs. If not, see <https://www.gnu.org/licenses/>.
+GPL-3.0-or-later. See [LICENSE.md](LICENSE.md) for details.
 
 [Bundler]: https://bundler.io
 [bundler-audit]: https://github.com/rubysec/bundler-audit
 [ruby-advisory-db]: https://github.com/rubysec/ruby-advisory-db
 [libgit2]: https://libgit2.org
+[hyperfine]: https://github.com/sharkdp/hyperfine

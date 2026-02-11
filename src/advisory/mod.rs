@@ -1,5 +1,5 @@
-mod model;
 mod database;
+mod model;
 
-pub use model::{Advisory, Criticality};
 pub use database::{Database, DatabaseError};
+pub use model::{Advisory, Criticality};
