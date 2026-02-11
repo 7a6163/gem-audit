@@ -248,11 +248,7 @@ impl Database {
                     match Advisory::load(&path) {
                         Ok(advisory) => results.push(advisory),
                         Err(e) => {
-                            eprintln!(
-                                "warning: failed to load advisory {}: {}",
-                                path.display(),
-                                e
-                            );
+                            eprintln!("warning: failed to load advisory {}: {}", path.display(), e);
                         }
                     }
                 }
