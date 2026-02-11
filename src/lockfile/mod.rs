@@ -24,7 +24,9 @@ pub struct Lockfile {
 impl Lockfile {
     /// Find a gem spec by name. Returns the first match (without platform suffix).
     pub fn find_spec(&self, name: &str) -> Option<&GemSpec> {
-        self.specs.iter().find(|s| s.name == name && s.platform.is_none())
+        self.specs
+            .iter()
+            .find(|s| s.name == name && s.platform.is_none())
     }
 
     /// Find all gem specs by name (including platform variants).
@@ -122,7 +124,10 @@ pub enum ParseError {
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ParseError::UnexpectedLine { line_number, content } => {
+            ParseError::UnexpectedLine {
+                line_number,
+                content,
+            } => {
                 write!(f, "unexpected line at {}: '{}'", line_number, content)
             }
             ParseError::MissingField { section, field } => {

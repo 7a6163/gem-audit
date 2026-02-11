@@ -141,12 +141,10 @@ impl Advisory {
 
         let raw: AdvisoryYaml = serde_yaml::from_str(yaml)?;
 
-        let patched_versions = parse_version_requirements(
-            raw.patched_versions.as_deref().unwrap_or(&[]),
-        )?;
-        let unaffected_versions = parse_version_requirements(
-            raw.unaffected_versions.as_deref().unwrap_or(&[]),
-        )?;
+        let patched_versions =
+            parse_version_requirements(raw.patched_versions.as_deref().unwrap_or(&[]))?;
+        let unaffected_versions =
+            parse_version_requirements(raw.unaffected_versions.as_deref().unwrap_or(&[]))?;
 
         Ok(Advisory {
             id,
@@ -242,9 +240,7 @@ impl fmt::Display for Advisory {
 /// into `Requirement` objects.
 ///
 /// Each string like `"~> 0.1.42"` or `">= 1.0, < 2.0"` becomes a `Requirement`.
-fn parse_version_requirements(
-    versions: &[String],
-) -> Result<Vec<Requirement>, AdvisoryError> {
+fn parse_version_requirements(versions: &[String]) -> Result<Vec<Requirement>, AdvisoryError> {
     versions
         .iter()
         .map(|v| {
@@ -264,8 +260,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn fixture_path() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/advisory/CVE-2020-1234.yml")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/advisory/CVE-2020-1234.yml")
     }
 
     fn load_fixture() -> Advisory {
@@ -340,8 +335,7 @@ mod tests {
                 "---\ngem: test\ncvss_v3: {}\npatched_versions:\n  - \">= 1.0\"\n",
                 v3
             );
-            let adv =
-                Advisory::from_yaml(&yaml, Path::new("test.yml")).unwrap();
+            let adv = Advisory::from_yaml(&yaml, Path::new("test.yml")).unwrap();
             assert_eq!(adv.criticality(), Some(expected), "cvss_v3={}", v3);
         };
 

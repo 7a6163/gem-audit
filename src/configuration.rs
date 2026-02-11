@@ -50,8 +50,8 @@ impl Configuration {
             return Err(ConfigError::FileNotFound(path.display().to_string()));
         }
 
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| ConfigError::FileNotFound(e.to_string()))?;
+        let content =
+            std::fs::read_to_string(path).map_err(|e| ConfigError::FileNotFound(e.to_string()))?;
 
         Self::from_yaml(&content)
     }
@@ -67,8 +67,8 @@ impl Configuration {
 
     /// Parse configuration from a YAML string.
     pub fn from_yaml(yaml: &str) -> Result<Self, ConfigError> {
-        let value: serde_yaml::Value = serde_yaml::from_str(yaml)
-            .map_err(|e| ConfigError::InvalidYaml(e.to_string()))?;
+        let value: serde_yaml::Value =
+            serde_yaml::from_str(yaml).map_err(|e| ConfigError::InvalidYaml(e.to_string()))?;
 
         // Must be a mapping (Hash)
         let mapping = match value.as_mapping() {
@@ -141,7 +141,8 @@ mod tests {
 
     #[test]
     fn load_missing_file_returns_default() {
-        let config = Configuration::load_or_default(Path::new("/nonexistent/.bundler-audit.yml")).unwrap();
+        let config =
+            Configuration::load_or_default(Path::new("/nonexistent/.bundler-audit.yml")).unwrap();
         assert!(config.ignore.is_empty());
     }
 
@@ -174,12 +175,17 @@ mod tests {
 
     #[test]
     fn reject_ignore_contains_non_string() {
-        let result = Configuration::load(&fixtures_dir().join("bad/ignore_contains_a_non_string.yml"));
+        let result =
+            Configuration::load(&fixtures_dir().join("bad/ignore_contains_a_non_string.yml"));
         assert!(result.is_err());
         let err = result.unwrap_err();
         match err {
             ConfigError::InvalidConfiguration(msg) => {
-                assert!(msg.contains("non-String"), "expected 'non-String' in error: {}", msg);
+                assert!(
+                    msg.contains("non-String"),
+                    "expected 'non-String' in error: {}",
+                    msg
+                );
             }
             other => panic!("expected InvalidConfiguration, got: {:?}", other),
         }

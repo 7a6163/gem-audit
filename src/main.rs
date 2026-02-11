@@ -142,7 +142,18 @@ fn main() {
         }
         None => {
             // Default command is check (like Ruby bundler-audit)
-            cmd_check(".", false, false, &[], false, None, OutputFormat::Text, "Gemfile.lock", Configuration::DEFAULT_FILE, None);
+            cmd_check(
+                ".",
+                false,
+                false,
+                &[],
+                false,
+                None,
+                OutputFormat::Text,
+                "Gemfile.lock",
+                Configuration::DEFAULT_FILE,
+                None,
+            );
         }
     }
 }
@@ -251,9 +262,7 @@ fn cmd_check(
         config.ignore
     };
 
-    let options = ScanOptions {
-        ignore: ignore_set,
-    };
+    let options = ScanOptions { ignore: ignore_set };
 
     let report = scanner.scan(&options);
 

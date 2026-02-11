@@ -20,7 +20,12 @@ pub fn print_text(
 ) {
     for source in &report.insecure_sources {
         if use_color {
-            writeln!(output, "{}Insecure Source URI found: {}{}", YELLOW, source.source, RESET).ok();
+            writeln!(
+                output,
+                "{}Insecure Source URI found: {}{}",
+                YELLOW, source.source, RESET
+            )
+            .ok();
         } else {
             writeln!(output, "Insecure Source URI found: {}", source.source).ok();
         }
@@ -162,8 +167,8 @@ fn label_value(output: &mut dyn Write, label: &str, value: &str, use_color: bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scanner::{InsecureSource, Report, UnpatchedGem};
     use crate::advisory::Advisory;
+    use crate::scanner::{InsecureSource, Report, UnpatchedGem};
     use std::path::Path;
 
     fn make_report_with_insecure_source() -> Report {

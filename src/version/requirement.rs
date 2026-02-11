@@ -153,7 +153,6 @@ impl Requirement {
     pub fn satisfied_by(&self, version: &Version) -> bool {
         self.constraints.iter().all(|c| c.satisfied_by(version))
     }
-
 }
 
 impl Default for Requirement {
@@ -478,8 +477,7 @@ mod tests {
         ];
         let unaffected: Vec<Requirement> = vec![Requirement::parse("< 0.1.0").unwrap()];
 
-        let is_patched =
-            |v: &Version| -> bool { patched.iter().any(|req| req.satisfied_by(v)) };
+        let is_patched = |v: &Version| -> bool { patched.iter().any(|req| req.satisfied_by(v)) };
         let is_unaffected =
             |v: &Version| -> bool { unaffected.iter().any(|req| req.satisfied_by(v)) };
         let is_vulnerable = |v: &str| -> bool {

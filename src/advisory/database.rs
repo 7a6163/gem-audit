@@ -209,11 +209,7 @@ impl Database {
                 {
                     count += advisory_files
                         .flatten()
-                        .filter(|f| {
-                            f.path()
-                                .extension()
-                                .is_some_and(|ext| ext == "yml")
-                        })
+                        .filter(|f| f.path().extension().is_some_and(|ext| ext == "yml"))
                         .count();
                 }
             }
@@ -231,11 +227,7 @@ impl Database {
                     match Advisory::load(&path) {
                         Ok(advisory) => results.push(advisory),
                         Err(e) => {
-                            eprintln!(
-                                "warning: failed to load advisory {}: {}",
-                                path.display(),
-                                e
-                            );
+                            eprintln!("warning: failed to load advisory {}: {}", path.display(), e);
                         }
                     }
                 }
@@ -318,10 +310,7 @@ mod tests {
         if let Some(db) = local_db() {
             let advisories = db.advisories_for("actionpack");
             // actionpack has many known CVEs
-            assert!(
-                !advisories.is_empty(),
-                "expected advisories for actionpack"
-            );
+            assert!(!advisories.is_empty(), "expected advisories for actionpack");
         }
     }
 
@@ -351,8 +340,7 @@ mod tests {
 
     #[test]
     fn open_fixture_advisory_dir() {
-        let fixture_dir =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
         // Create a mini advisory-db structure
         let db_dir = fixture_dir.join("mock_db");
         let gem_dir = db_dir.join("gems").join("test");
