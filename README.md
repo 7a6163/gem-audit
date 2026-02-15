@@ -180,6 +180,66 @@ $ gem-audit check --config custom-audit.yml
 
 CLI `--ignore` flags take precedence over the configuration file.
 
+## GitHub Actions
+
+A dedicated [gem-audit-action] is available on the GitHub Marketplace:
+
+```yaml
+- uses: 7a6163/gem-audit-action@v1
+```
+
+Or use the binary directly in your workflow:
+
+### Basic check
+
+```yaml
+name: Security Audit
+on: [push, pull_request]
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: 7a6163/gem-audit-action@v1
+```
+
+### Severity threshold
+
+Only fail on high and critical vulnerabilities:
+
+```yaml
+      - uses: 7a6163/gem-audit-action@v1
+        with:
+          severity: high
+```
+
+### Strict mode with fresh database
+
+```yaml
+      - uses: 7a6163/gem-audit-action@v1
+        with:
+          strict: true
+          max-db-age: 7
+          fail-on-stale: true
+```
+
+### JSON report as artifact
+
+```yaml
+      - uses: 7a6163/gem-audit-action@v1
+        with:
+          format: json
+          output: audit-report.json
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audit-report
+          path: audit-report.json
+```
+
+[gem-audit-action]: https://github.com/7a6163/gem-audit-action
+
 ## Performance
 
 Benchmarked with [hyperfine] on Apple M-series, comparing against Ruby bundler-audit 0.9.2:
