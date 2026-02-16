@@ -1,6 +1,11 @@
 # gem-audit
 
-Patch-level verification for [Bundler] dependencies, rewritten in Rust.
+[![CI](https://github.com/7a6163/gem-audit/actions/workflows/ci.yml/badge.svg)](https://github.com/7a6163/gem-audit/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/7a6163/gem-audit/graph/badge.svg)](https://codecov.io/gh/7a6163/gem-audit)
+[![Crates.io](https://img.shields.io/crates/v/gem-audit)](https://crates.io/crates/gem-audit)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
+
+Fast, standalone security auditor for [Bundler] dependencies, rewritten in Rust.
 
 A security auditor for `Gemfile.lock` inspired by [bundler-audit], compiled to a
 single static binary with zero runtime dependencies -- no Ruby, no Bundler, no
