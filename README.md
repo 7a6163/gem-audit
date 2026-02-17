@@ -262,17 +262,49 @@ Run the benchmark yourself:
 $ ./benchmarks/bench.sh
 ```
 
-## Compatibility
+## Comparison with bundler-audit
 
-This is a Rust reimplementation inspired by [bundler-audit] v0.9.x.
-It uses the same [ruby-advisory-db] and produces equivalent output.
+gem-audit is a Rust reimplementation inspired by [bundler-audit] v0.9.x.
+Both use the same [ruby-advisory-db] and produce equivalent output.
 
-Key differences from the Ruby version:
+### Feature comparison
 
-* Single static binary -- no Ruby runtime required.
-* Uses [gix] (gitoxide), a pure Rust git implementation.
-* No Rake task integration (not applicable outside Ruby projects).
-* No JUnit output format (text and JSON only).
+| Feature | gem-audit | bundler-audit |
+|---------|-----------|---------------|
+| Language | Rust | Ruby |
+| Runtime dependencies | **None** (single static binary) | Ruby, Bundler, Git |
+| Advisory database | [ruby-advisory-db] | [ruby-advisory-db] |
+| Git implementation | [gix] (pure Rust) | System Git CLI |
+| Vulnerability check | Yes | Yes |
+| Insecure source check | Yes | Yes |
+| Ignore advisories | `--ignore` + config file | `--ignore` + config file |
+| Output formats | Text, JSON | Text, JSON |
+| Output to file | `--output` | `--output` |
+| Severity filtering | `--severity` | No |
+| Stale DB warning | `--max-db-age` | No |
+| Fail on stale DB | `--fail-on-stale` | No |
+| Strict mode | `--strict` | No |
+| Exit codes | 0 / 1 / 2 / 3 (semantic) | 0 / 1 |
+| DB statistics | `gem-audit stats` | No |
+| Configuration file | `.gem-audit.yml` | `.bundler-audit.yml` |
+| Backward-compatible config | `.bundler-audit.yml` supported | — |
+| Rake integration | No | Yes |
+| GitHub Action | [gem-audit-action] | Community actions |
+| Performance | ~10 ms | ~230 ms |
+
+### Why choose gem-audit?
+
+* **Zero dependencies** -- no Ruby, Bundler, or Git required. Drop a single binary into any CI image.
+* **15-29x faster** -- finishes in milliseconds, ideal for pre-commit hooks and fast CI pipelines.
+* **Severity filtering** -- only fail on `high` or `critical` vulnerabilities with `--severity`.
+* **Database freshness** -- `--max-db-age` and `--fail-on-stale` ensure your advisory data is never outdated.
+* **Strict mode** -- treat parse/load warnings as errors for stricter CI policies.
+* **Richer exit codes** -- distinguish between vulnerabilities (1), tool errors (2), and stale database (3).
+
+### Why choose bundler-audit?
+
+* **Rake integration** -- useful if your build is driven by Rake tasks.
+* **Ruby ecosystem** -- installs via `gem install bundler-audit`, no extra toolchain needed if Ruby is already present.
 
 ## Architecture
 
