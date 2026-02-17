@@ -1,3 +1,20 @@
+### 2.1.1 / 2026-02-16
+
+#### Fixed
+
+* Replaced `blocking-http-transport-curl` with `blocking-http-transport-reqwest-rust-tls`
+  for HTTPS support. The curl backend required system OpenSSL, which broke
+  cross-compilation for `aarch64-unknown-linux-gnu` and failed at runtime on
+  minimal Linux environments with `'https' is not compiled in`.
+
+#### Changed
+
+* Updated package description.
+* Added `repository`, `homepage`, `keywords`, and `categories` metadata to
+  `Cargo.toml` for crates.io publishing.
+* Added CI, Codecov, Crates.io, and license badges to README.
+* Added `codecov.yml` with coverage thresholds.
+
 ### 2.1.0 / 2026-02-15
 
 #### Added
