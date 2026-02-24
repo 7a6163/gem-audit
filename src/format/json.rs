@@ -2,7 +2,23 @@ use std::io::Write;
 
 use serde_json::{Value, json};
 
+use crate::advisory::Advisory;
 use crate::scanner::Report;
+
+fn advisory_to_json(adv: &Advisory) -> Value {
+    json!({
+        "id": adv.id,
+        "cve": adv.cve_id(),
+        "ghsa": adv.ghsa_id(),
+        "osvdb": adv.osvdb_id(),
+        "url": adv.url,
+        "title": adv.title,
+        "date": adv.date,
+        "criticality": adv.criticality().map(|c| c.to_string()),
+        "cvss_v2": adv.cvss_v2,
+        "cvss_v3": adv.cvss_v3,
+    })
+}
 
 /// Print the scan report as JSON.
 pub fn print_json(report: &Report, output: &mut dyn Write, pretty: bool, fix: bool) {
@@ -16,25 +32,23 @@ pub fn print_json(report: &Report, output: &mut dyn Write, pretty: bool, fix: bo
             })
         })
         .chain(report.unpatched_gems.iter().map(|v| {
-            let adv = &v.advisory;
             json!({
                 "type": "unpatched_gem",
                 "gem": {
                     "name": v.name,
                     "version": v.version,
                 },
-                "advisory": {
-                    "id": adv.id,
-                    "cve": adv.cve_id(),
-                    "ghsa": adv.ghsa_id(),
-                    "osvdb": adv.osvdb_id(),
-                    "url": adv.url,
-                    "title": adv.title,
-                    "date": adv.date,
-                    "criticality": adv.criticality().map(|c| c.to_string()),
-                    "cvss_v2": adv.cvss_v2,
-                    "cvss_v3": adv.cvss_v3,
+                "advisory": advisory_to_json(&v.advisory),
+            })
+        }))
+        .chain(report.vulnerable_rubies.iter().map(|v| {
+            json!({
+                "type": "vulnerable_ruby",
+                "ruby": {
+                    "engine": v.engine,
+                    "version": v.version,
                 },
+                "advisory": advisory_to_json(&v.advisory),
             })
         }))
         .collect();
@@ -97,6 +111,7 @@ mod tests {
         let report = Report {
             insecure_sources: vec![],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -115,6 +130,7 @@ mod tests {
                 source: "http://rubygems.org/".to_string(),
             }],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -138,6 +154,7 @@ mod tests {
                 version: "0.5.0".to_string(),
                 advisory,
             }],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -158,6 +175,7 @@ mod tests {
         let report = Report {
             insecure_sources: vec![],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -186,6 +204,7 @@ mod tests {
                 version: "0.5.0".to_string(),
                 advisory,
             }],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -216,6 +235,7 @@ mod tests {
                 version: "0.5.0".to_string(),
                 advisory,
             }],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -232,6 +252,7 @@ mod tests {
         let report = Report {
             insecure_sources: vec![],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 5,
             advisory_load_errors: 3,
         };
@@ -257,6 +278,7 @@ mod tests {
                 version: "0.5.0".to_string(),
                 advisory,
             }],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };

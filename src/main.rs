@@ -466,8 +466,16 @@ fn cmd_stats(database: Option<&str>) -> i32 {
 }
 
 fn print_stats(db: &Database) {
+    let gems = db.size();
+    let rubies = db.rubies_size();
+
     println!("ruby-advisory-db:");
-    println!("  advisories:\t{} advisories", db.size());
+    println!("  advisories:\t{} advisories", gems + rubies);
+
+    if rubies > 0 {
+        println!("  gems:\t\t{}", gems);
+        println!("  rubies:\t{}", rubies);
+    }
 
     if let Some(ts) = db.last_updated_at() {
         println!("  last updated:\t{}", format_timestamp(ts));

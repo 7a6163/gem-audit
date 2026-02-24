@@ -211,16 +211,58 @@ impl Database {
         (vulnerable, errors)
     }
 
-    /// Total number of advisories in the database.
+    /// Get advisories for a specific Ruby engine (e.g., "ruby", "jruby").
+    pub fn advisories_for_ruby(&self, engine: &str) -> Vec<Advisory> {
+        self.advisories_for_ruby_with_errors(engine).0
+    }
+
+    /// Get advisories for a specific Ruby engine, along with the count of load errors.
+    fn advisories_for_ruby_with_errors(&self, engine: &str) -> (Vec<Advisory>, usize) {
+        let mut results = Vec::new();
+        let engine_dir = self.path.join("rubies").join(engine);
+
+        let errors = if engine_dir.is_dir() {
+            self.load_advisories_from_dir(&engine_dir, &mut results)
+        } else {
+            0
+        };
+
+        (results, errors)
+    }
+
+    /// Check a Ruby engine+version against the database.
+    ///
+    /// Returns all advisories that the Ruby version is vulnerable to,
+    /// along with the count of advisory files that failed to load.
+    pub fn check_ruby(&self, engine: &str, version: &Version) -> (Vec<Advisory>, usize) {
+        let (advisories, errors) = self.advisories_for_ruby_with_errors(engine);
+        let vulnerable = advisories
+            .into_iter()
+            .filter(|advisory| advisory.vulnerable(version))
+            .collect();
+        (vulnerable, errors)
+    }
+
+    /// Total number of gem advisories in the database.
     pub fn size(&self) -> usize {
-        let gems_dir = self.path.join("gems");
-        if !gems_dir.is_dir() {
+        self.count_advisories_in("gems")
+    }
+
+    /// Total number of Ruby interpreter advisories in the database.
+    pub fn rubies_size(&self) -> usize {
+        self.count_advisories_in("rubies")
+    }
+
+    /// Count advisory YAML files under a top-level directory (e.g., "gems" or "rubies").
+    fn count_advisories_in(&self, subdir: &str) -> usize {
+        let dir = self.path.join(subdir);
+        if !dir.is_dir() {
             return 0;
         }
 
         let mut count = 0;
-        if let Ok(gem_dirs) = std::fs::read_dir(&gems_dir) {
-            for entry in gem_dirs.flatten() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
                 if entry.path().is_dir()
                     && let Ok(advisory_files) = std::fs::read_dir(entry.path())
                 {
@@ -457,6 +499,54 @@ mod tests {
         let db = Database::open(&db_dir).unwrap();
         assert_eq!(db.size(), 1);
         std::fs::remove_dir_all(&db_dir).unwrap();
+    }
+
+    // ========== Ruby advisory methods ==========
+
+    #[test]
+    fn rubies_size_with_mock() {
+        // Use the shared mock_db fixture which has rubies/ruby/CVE-2021-31810.yml
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let db_dir = fixture_dir.join("mock_db");
+        let db = Database::open(&db_dir).unwrap();
+        assert_eq!(db.rubies_size(), 1);
+    }
+
+    #[test]
+    fn advisories_for_ruby_with_mock() {
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let db_dir = fixture_dir.join("mock_db");
+        let db = Database::open(&db_dir).unwrap();
+        let advisories = db.advisories_for_ruby("ruby");
+        assert_eq!(advisories.len(), 1);
+        assert_eq!(advisories[0].id, "CVE-2021-31810");
+    }
+
+    #[test]
+    fn check_ruby_vulnerable_version() {
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let db_dir = fixture_dir.join("mock_db");
+        let db = Database::open(&db_dir).unwrap();
+        let (vulns, _) = db.check_ruby("ruby", &Version::parse("2.6.0").unwrap());
+        assert_eq!(vulns.len(), 1);
+    }
+
+    #[test]
+    fn check_ruby_patched_version() {
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let db_dir = fixture_dir.join("mock_db");
+        let db = Database::open(&db_dir).unwrap();
+        let (vulns, _) = db.check_ruby("ruby", &Version::parse("3.0.2").unwrap());
+        assert!(vulns.is_empty());
+    }
+
+    #[test]
+    fn check_ruby_nonexistent_engine() {
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let db_dir = fixture_dir.join("mock_db");
+        let db = Database::open(&db_dir).unwrap();
+        let (vulns, _) = db.check_ruby("nonexistent", &Version::parse("1.0.0").unwrap());
+        assert!(vulns.is_empty());
     }
 
     // ========== commit_id / last_updated_at for non-git ==========

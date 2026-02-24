@@ -8,11 +8,12 @@ use crate::advisory::{Advisory, Criticality, Database, DatabaseError};
 use crate::lockfile::{self, Lockfile, Source};
 use crate::version::Version;
 
-/// A scan result: either an insecure source or an unpatched gem.
+/// A scan result: an insecure source, an unpatched gem, or a vulnerable Ruby version.
 #[derive(Debug)]
 pub enum ScanResult {
     InsecureSource(InsecureSource),
     UnpatchedGem(Box<UnpatchedGem>),
+    VulnerableRuby(Box<VulnerableRuby>),
 }
 
 /// An insecure gem source (`git://` or `http://`).
@@ -45,6 +46,27 @@ impl fmt::Display for UnpatchedGem {
     }
 }
 
+/// A Ruby interpreter version with a known vulnerability.
+#[derive(Debug)]
+pub struct VulnerableRuby {
+    /// The Ruby engine (e.g., "ruby", "jruby").
+    pub engine: String,
+    /// The installed version.
+    pub version: String,
+    /// The advisory describing the vulnerability.
+    pub advisory: Advisory,
+}
+
+impl fmt::Display for VulnerableRuby {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} ({}): {}",
+            self.engine, self.version, self.advisory.id
+        )
+    }
+}
+
 /// A grouped remediation suggestion for a single gem.
 #[derive(Debug)]
 pub struct Remediation {
@@ -61,6 +83,7 @@ pub struct Remediation {
 pub struct Report {
     pub insecure_sources: Vec<InsecureSource>,
     pub unpatched_gems: Vec<UnpatchedGem>,
+    pub vulnerable_rubies: Vec<VulnerableRuby>,
     /// Number of gem versions that failed to parse.
     pub version_parse_errors: usize,
     /// Number of advisory YAML files that failed to load.
@@ -70,12 +93,16 @@ pub struct Report {
 impl Report {
     /// Returns true if any vulnerabilities were found.
     pub fn vulnerable(&self) -> bool {
-        !self.insecure_sources.is_empty() || !self.unpatched_gems.is_empty()
+        !self.insecure_sources.is_empty()
+            || !self.unpatched_gems.is_empty()
+            || !self.vulnerable_rubies.is_empty()
     }
 
     /// Total number of issues found.
     pub fn count(&self) -> usize {
-        self.insecure_sources.len() + self.unpatched_gems.len()
+        self.insecure_sources.len()
+            + self.unpatched_gems.len()
+            + self.vulnerable_rubies.len()
     }
 
     /// Group unpatched gems into remediation suggestions.
@@ -117,6 +144,25 @@ pub struct ScanOptions {
     pub strict: bool,
 }
 
+impl ScanOptions {
+    /// Check whether an advisory should be reported based on ignore list and severity threshold.
+    fn should_report(&self, advisory: &Advisory) -> bool {
+        if !self.ignore.is_empty() {
+            let identifiers: HashSet<String> = advisory.identifiers().into_iter().collect();
+            if !self.ignore.is_disjoint(&identifiers) {
+                return false;
+            }
+        }
+        if let Some(threshold) = &self.severity {
+            match advisory.criticality() {
+                Some(crit) if crit >= *threshold => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ScanError {
     #[error("Gemfile.lock not found: {0}")]
@@ -156,12 +202,14 @@ impl Scanner {
     pub fn scan(&self, options: &ScanOptions) -> Report {
         let insecure_sources = self.scan_sources();
         let (unpatched_gems, version_parse_errors, advisory_load_errors) = self.scan_specs(options);
+        let (vulnerable_rubies, ruby_advisory_errors) = self.scan_ruby(options);
 
         Report {
             insecure_sources,
             unpatched_gems,
+            vulnerable_rubies,
             version_parse_errors,
-            advisory_load_errors,
+            advisory_load_errors: advisory_load_errors + ruby_advisory_errors,
         }
     }
 
@@ -229,20 +277,8 @@ impl Scanner {
             advisory_load_errors += load_errors;
 
             for advisory in advisories {
-                // Check if any of the advisory's identifiers are in the ignore list
-                if !options.ignore.is_empty() {
-                    let identifiers: HashSet<String> = advisory.identifiers().into_iter().collect();
-                    if !options.ignore.is_disjoint(&identifiers) {
-                        continue;
-                    }
-                }
-
-                // Filter by severity threshold
-                if let Some(threshold) = &options.severity {
-                    match advisory.criticality() {
-                        Some(crit) if crit >= *threshold => {}
-                        _ => continue, // Below threshold or no CVSS score
-                    }
+                if !options.should_report(&advisory) {
+                    continue;
                 }
 
                 results.push(UnpatchedGem {
@@ -257,6 +293,42 @@ impl Scanner {
         results.sort_by(|a, b| b.advisory.criticality().cmp(&a.advisory.criticality()));
 
         (results, version_parse_errors, advisory_load_errors)
+    }
+
+    /// Scan the Ruby interpreter version against the advisory database.
+    ///
+    /// Returns `(vulnerable_rubies, advisory_load_errors)`.
+    pub fn scan_ruby(&self, options: &ScanOptions) -> (Vec<VulnerableRuby>, usize) {
+        let ruby_version = match self.lockfile.parsed_ruby_version() {
+            Some(rv) => rv,
+            None => return (Vec::new(), 0),
+        };
+
+        let version = match Version::parse(&ruby_version.version) {
+            Ok(v) => v,
+            Err(_) => return (Vec::new(), 0),
+        };
+
+        let (advisories, load_errors) =
+            self.database.check_ruby(&ruby_version.engine, &version);
+
+        let mut results = Vec::new();
+        for advisory in advisories {
+            if !options.should_report(&advisory) {
+                continue;
+            }
+
+            results.push(VulnerableRuby {
+                engine: ruby_version.engine.clone(),
+                version: ruby_version.version.clone(),
+                advisory,
+            });
+        }
+
+        // Sort by criticality descending
+        results.sort_by(|a, b| b.advisory.criticality().cmp(&a.advisory.criticality()));
+
+        (results, load_errors)
     }
 }
 
@@ -624,6 +696,7 @@ mod tests {
                 source: "http://rubygems.org/".to_string(),
             }],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -636,6 +709,7 @@ mod tests {
         let report = Report {
             insecure_sources: vec![],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -650,6 +724,7 @@ mod tests {
         let report = Report {
             insecure_sources: vec![],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -689,6 +764,7 @@ mod tests {
                     advisory: adv3,
                 },
             ],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -729,6 +805,7 @@ mod tests {
                     advisory: adv2,
                 },
             ],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -912,5 +989,92 @@ DEPENDENCIES
 
         let insecure = scanner.scan_sources();
         assert!(insecure.is_empty(), "PATH sources should be safe");
+    }
+
+    // ========== Ruby Version Scanning ==========
+
+    #[test]
+    fn scan_ruby_detects_vulnerable_version() {
+        let input = include_str!("../tests/fixtures/vulnerable_ruby/Gemfile.lock");
+        let lockfile = lockfile::parse(input).unwrap();
+        let db = mock_database();
+        let scanner = Scanner::from_lockfile(lockfile, db);
+
+        let opts = ScanOptions::default();
+        let (vulns, _) = scanner.scan_ruby(&opts);
+        assert_eq!(vulns.len(), 1);
+        assert_eq!(vulns[0].engine, "ruby");
+        assert_eq!(vulns[0].version, "2.6.0");
+        assert_eq!(vulns[0].advisory.id, "CVE-2021-31810");
+    }
+
+    #[test]
+    fn scan_ruby_no_ruby_version_section() {
+        let input = include_str!("../tests/fixtures/secure/Gemfile.lock");
+        let lockfile = lockfile::parse(input).unwrap();
+        let db = mock_database();
+        let scanner = Scanner::from_lockfile(lockfile, db);
+
+        let opts = ScanOptions::default();
+        let (vulns, _) = scanner.scan_ruby(&opts);
+        assert!(vulns.is_empty());
+    }
+
+    #[test]
+    fn scan_ruby_respects_ignore_list() {
+        let input = include_str!("../tests/fixtures/vulnerable_ruby/Gemfile.lock");
+        let lockfile = lockfile::parse(input).unwrap();
+        let db = mock_database();
+        let scanner = Scanner::from_lockfile(lockfile, db);
+
+        let mut ignore = HashSet::new();
+        ignore.insert("CVE-2021-31810".to_string());
+        let opts = ScanOptions {
+            ignore,
+            ..Default::default()
+        };
+        let (vulns, _) = scanner.scan_ruby(&opts);
+        assert!(vulns.is_empty());
+    }
+
+    #[test]
+    fn scan_ruby_respects_severity_filter() {
+        let input = include_str!("../tests/fixtures/vulnerable_ruby/Gemfile.lock");
+        let lockfile = lockfile::parse(input).unwrap();
+        let db = mock_database();
+        let scanner = Scanner::from_lockfile(lockfile, db);
+
+        // CVE-2021-31810 has cvss_v3=5.9 (Medium), filter for High should exclude it
+        let opts = ScanOptions {
+            severity: Some(Criticality::High),
+            ..Default::default()
+        };
+        let (vulns, _) = scanner.scan_ruby(&opts);
+        assert!(vulns.is_empty());
+    }
+
+    #[test]
+    fn scan_full_includes_ruby_vulnerabilities() {
+        let input = include_str!("../tests/fixtures/vulnerable_ruby/Gemfile.lock");
+        let lockfile = lockfile::parse(input).unwrap();
+        let db = mock_database();
+        let scanner = Scanner::from_lockfile(lockfile, db);
+
+        let opts = ScanOptions::default();
+        let report = scanner.scan(&opts);
+        assert!(report.vulnerable());
+        assert_eq!(report.vulnerable_rubies.len(), 1);
+    }
+
+    #[test]
+    fn report_count_includes_ruby_vulns() {
+        let input = include_str!("../tests/fixtures/vulnerable_ruby/Gemfile.lock");
+        let lockfile = lockfile::parse(input).unwrap();
+        let db = mock_database();
+        let scanner = Scanner::from_lockfile(lockfile, db);
+
+        let opts = ScanOptions::default();
+        let report = scanner.scan(&opts);
+        assert!(report.count() >= 1);
     }
 }

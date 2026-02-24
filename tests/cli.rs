@@ -490,16 +490,122 @@ fn check_severity_filter() {
     );
 }
 
+// ==================== check — vulnerable Ruby version ====================
+
+#[test]
+fn check_vulnerable_ruby_version() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            fixtures_dir()
+                .join("vulnerable_ruby/Gemfile.lock")
+                .to_str()
+                .unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .stdout(
+            predicate::str::contains("Engine")
+                .and(predicate::str::contains("ruby"))
+                .and(predicate::str::contains("2.6.0"))
+                .and(predicate::str::contains("CVE-2021-31810"))
+                .and(predicate::str::contains("vulnerable Ruby version")),
+        );
+}
+
+#[test]
+fn check_vulnerable_ruby_json() {
+    let output = Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--format",
+            "json",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            fixtures_dir()
+                .join("vulnerable_ruby/Gemfile.lock")
+                .to_str()
+                .unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = parsed["results"].as_array().unwrap();
+    assert!(results.iter().any(|r| r["type"] == "vulnerable_ruby"));
+
+    let ruby_result = results
+        .iter()
+        .find(|r| r["type"] == "vulnerable_ruby")
+        .unwrap();
+    assert_eq!(ruby_result["ruby"]["engine"], "ruby");
+    assert_eq!(ruby_result["ruby"]["version"], "2.6.0");
+    assert_eq!(ruby_result["advisory"]["cve"], "CVE-2021-31810");
+}
+
+#[test]
+fn check_vulnerable_ruby_ignore() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            fixtures_dir()
+                .join("vulnerable_ruby/Gemfile.lock")
+                .to_str()
+                .unwrap(),
+            "--ignore",
+            "CVE-2021-31810",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No vulnerabilities found"));
+}
+
+#[test]
+fn check_vulnerable_ruby_severity_filter() {
+    // CVE-2021-31810 is Medium (5.9); filtering for High should exclude it
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            fixtures_dir()
+                .join("vulnerable_ruby/Gemfile.lock")
+                .to_str()
+                .unwrap(),
+            "--severity",
+            "high",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No vulnerabilities found"));
+}
+
 // ==================== stats with mock DB ====================
 
 #[test]
 fn stats_with_mock_db() {
-    // The mock_db doesn't have a git repo, so commit/date info won't appear
-    // but it should still print the advisory count
+    // The mock_db now has both gems/ and rubies/
     Command::cargo_bin("gem-audit")
         .unwrap()
         .args(["stats", "--database", mock_db().to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("ruby-advisory-db:"));
+        .stdout(
+            predicate::str::contains("ruby-advisory-db:")
+                .and(predicate::str::contains("gems:"))
+                .and(predicate::str::contains("rubies:")),
+        );
 }
