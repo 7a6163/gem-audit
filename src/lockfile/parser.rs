@@ -660,6 +660,102 @@ DEPENDENCIES
         assert_eq!(lockfile.dependencies.len(), 1);
     }
 
+    // ========== PATH Source ==========
+
+    #[test]
+    fn parse_path_source() {
+        let input = "\
+PATH
+  remote: .
+  specs:
+    my_gem (0.1.0)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rack (2.0.0)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  my_gem!
+  rack
+";
+        let lockfile = parse(input).unwrap();
+        assert_eq!(lockfile.sources.len(), 2);
+        match &lockfile.sources[0] {
+            Source::Path(p) => assert_eq!(p.remote, "."),
+            other => panic!("expected Path source, got {:?}", other),
+        }
+        let my_gem = lockfile.find_spec("my_gem").unwrap();
+        assert_eq!(my_gem.version, "0.1.0");
+        assert_eq!(my_gem.source_index, 0);
+    }
+
+    // ========== GIT with tag ==========
+
+    #[test]
+    fn parse_git_source_with_tag() {
+        let input = "\
+GIT
+  remote: https://github.com/foo/bar.git
+  revision: abc123
+  tag: v1.0.0
+  specs:
+    bar (1.0.0)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rack (2.0.0)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  bar!
+  rack
+";
+        let lockfile = parse(input).unwrap();
+        match &lockfile.sources[0] {
+            Source::Git(git) => {
+                assert_eq!(git.tag, Some("v1.0.0".to_string()));
+                assert_eq!(git.revision, Some("abc123".to_string()));
+            }
+            other => panic!("expected Git source, got {:?}", other),
+        }
+    }
+
+    // ========== RUBY VERSION section ==========
+
+    #[test]
+    fn parse_ruby_version_section() {
+        let input = "\
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rack (2.0.0)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  rack
+
+RUBY VERSION
+   ruby 3.0.0p0
+
+BUNDLED WITH
+   2.3.6
+";
+        let lockfile = parse(input).unwrap();
+        assert_eq!(
+            lockfile.ruby_version,
+            Some("ruby 3.0.0p0".to_string())
+        );
+    }
+
     #[test]
     fn all_specs_have_valid_source_index() {
         let input = include_str!("../../tests/fixtures/insecure_sources/Gemfile.lock");

@@ -2,7 +2,7 @@ mod json;
 mod text;
 
 pub use json::print_json;
-pub use text::print_text;
+pub use text::{print_remediations, print_text};
 
 /// Supported output formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]

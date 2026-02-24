@@ -120,6 +120,12 @@ Treat parse/load warnings as errors:
 $ gem-audit check --strict
 ```
 
+Show remediation suggestions (dry-run, no files modified):
+
+```
+$ gem-audit check --fix
+```
+
 ## Commands
 
 | Command    | Description                                              |
@@ -149,6 +155,7 @@ Running `gem-audit` with no subcommand is equivalent to `gem-audit check`.
 | `--max-db-age <DAYS>`       | Warn if the advisory database is older than DAYS days |
 | `--fail-on-stale`           | Exit with code 3 if the database is stale  |
 | `--strict`                  | Treat parse/load warnings as errors (exit code 2) |
+| `--fix`                     | Show remediation suggestions for vulnerable gems   |
 
 ## Exit Codes
 

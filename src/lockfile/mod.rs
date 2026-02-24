@@ -123,3 +123,108 @@ pub enum ParseError {
     #[error("empty or unparseable lockfile")]
     Empty,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_lockfile() -> Lockfile {
+        let input = "\
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rack (2.2.0)
+    rack (2.2.0-x86_64-linux)
+    json (2.6.0)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  rack
+";
+        parse(input).unwrap()
+    }
+
+    #[test]
+    fn source_remote_rubygems() {
+        let src = Source::Rubygems(RubygemsSource {
+            remote: "https://rubygems.org/".to_string(),
+        });
+        assert_eq!(src.remote(), "https://rubygems.org/");
+    }
+
+    #[test]
+    fn source_remote_git() {
+        let src = Source::Git(GitSource {
+            remote: "git://github.com/foo/bar.git".to_string(),
+            revision: None,
+            branch: None,
+            tag: None,
+        });
+        assert_eq!(src.remote(), "git://github.com/foo/bar.git");
+    }
+
+    #[test]
+    fn source_remote_path() {
+        let src = Source::Path(PathSource {
+            remote: ".".to_string(),
+        });
+        assert_eq!(src.remote(), ".");
+    }
+
+    #[test]
+    fn find_spec_returns_platformless() {
+        let lockfile = sample_lockfile();
+        let spec = lockfile.find_spec("rack").unwrap();
+        assert_eq!(spec.version, "2.2.0");
+        assert!(spec.platform.is_none());
+    }
+
+    #[test]
+    fn find_spec_nonexistent() {
+        let lockfile = sample_lockfile();
+        assert!(lockfile.find_spec("nonexistent").is_none());
+    }
+
+    #[test]
+    fn find_specs_returns_all_variants() {
+        let lockfile = sample_lockfile();
+        let specs = lockfile.find_specs("rack");
+        assert_eq!(specs.len(), 2);
+    }
+
+    #[test]
+    fn find_specs_nonexistent() {
+        let lockfile = sample_lockfile();
+        let specs = lockfile.find_specs("nonexistent");
+        assert!(specs.is_empty());
+    }
+
+    #[test]
+    fn parse_error_unexpected_line_display() {
+        let err = ParseError::UnexpectedLine {
+            line_number: 42,
+            content: "bad line".to_string(),
+        };
+        assert_eq!(err.to_string(), "unexpected line at 42: 'bad line'");
+    }
+
+    #[test]
+    fn parse_error_missing_field_display() {
+        let err = ParseError::MissingField {
+            section: "GEM".to_string(),
+            field: "remote".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "missing field 'remote' in section 'GEM'"
+        );
+    }
+
+    #[test]
+    fn parse_error_empty_display() {
+        let err = ParseError::Empty;
+        assert_eq!(err.to_string(), "empty or unparseable lockfile");
+    }
+}
