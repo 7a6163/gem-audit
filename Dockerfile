@@ -1,4 +1,4 @@
-FROM rust:1.85-bookworm AS builder
+FROM rust:bookworm AS builder
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
@@ -7,7 +7,7 @@ COPY src/ src/
 RUN cargo build --release && strip target/release/gem-audit
 
 # Pre-download advisory database
-RUN target/release/gem-audit download --quiet
+RUN mkdir -p /root/.local/share && target/release/gem-audit download --quiet
 
 # -----------------------------------------------------------
 FROM gcr.io/distroless/cc-debian13
