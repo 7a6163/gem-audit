@@ -362,16 +362,7 @@ mod tests {
 
     #[test]
     fn open_fixture_advisory_dir() {
-        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-        // Create a mini advisory-db structure
-        let db_dir = fixture_dir.join("mock_db");
-        let gem_dir = db_dir.join("gems").join("test");
-        std::fs::create_dir_all(&gem_dir).unwrap();
-        std::fs::copy(
-            fixture_dir.join("advisory/CVE-2020-1234.yml"),
-            gem_dir.join("CVE-2020-1234.yml"),
-        )
-        .unwrap();
+        let (db_dir, _) = temp_mock_db("fixture");
 
         let db = Database::open(&db_dir).unwrap();
         assert!(!db.is_git());
@@ -388,7 +379,6 @@ mod tests {
         let (vulns, _errors) = db.check_gem("test", &Version::parse("1.0.0").unwrap());
         assert!(vulns.is_empty());
 
-        // Cleanup
         std::fs::remove_dir_all(&db_dir).unwrap();
     }
 
