@@ -22,6 +22,7 @@ pub fn print_text(
     verbose: bool,
     quiet: bool,
     use_color: bool,
+    fix: bool,
 ) {
     let total_sources = report.insecure_sources.len();
     let total_gems = report.unpatched_gems.len();
@@ -123,6 +124,101 @@ pub fn print_text(
             writeln!(output, "{}{}{}{}", YELLOW, BOLD, msg, RESET).ok();
         } else {
             writeln!(output, "{}", msg).ok();
+        }
+    }
+
+    if fix && report.vulnerable() {
+        print_remediations(report, output, use_color);
+    }
+}
+
+/// Print grouped remediation suggestions after the main report.
+pub fn print_remediations(report: &Report, output: &mut dyn Write, use_color: bool) {
+    let remediations = report.remediations();
+    if remediations.is_empty() {
+        return;
+    }
+
+    writeln!(output).ok();
+    if use_color {
+        writeln!(output, "{}{}Remediation:{}", BOLD, CYAN, RESET).ok();
+    } else {
+        writeln!(output, "Remediation:").ok();
+    }
+
+    for remediation in &remediations {
+        // Collect the union of all patched_versions across advisories
+        let mut all_patched: Vec<String> = Vec::new();
+        let mut seen_patched: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for adv in &remediation.advisories {
+            for pv in &adv.patched_versions {
+                let s = format!("'{}'", pv);
+                if seen_patched.insert(s.clone()) {
+                    all_patched.push(s);
+                }
+            }
+        }
+
+        writeln!(output).ok();
+
+        // Gem name with version and upgrade suggestion
+        if all_patched.is_empty() {
+            if use_color {
+                writeln!(
+                    output,
+                    "  {}{}{} ({} -> {}{}no patch available{})",
+                    BOLD, remediation.name, RESET, remediation.version, RED, BOLD, RESET
+                )
+                .ok();
+            } else {
+                writeln!(
+                    output,
+                    "  {} ({} -> no patch available)",
+                    remediation.name, remediation.version
+                )
+                .ok();
+            }
+        } else {
+            let versions_str = all_patched.join(", ");
+            if use_color {
+                writeln!(
+                    output,
+                    "  {}{}{} ({} -> upgrade to {})",
+                    BOLD, remediation.name, RESET, remediation.version, versions_str
+                )
+                .ok();
+            } else {
+                writeln!(
+                    output,
+                    "  {} ({} -> upgrade to {})",
+                    remediation.name, remediation.version, versions_str
+                )
+                .ok();
+            }
+        }
+
+        // List advisory IDs
+        let ids: Vec<String> = remediation
+            .advisories
+            .iter()
+            .map(|a| a.id.clone())
+            .collect();
+        if use_color {
+            writeln!(output, "    - {}{}{}", DIM, ids.join(", "), RESET).ok();
+        } else {
+            writeln!(output, "    - {}", ids.join(", ")).ok();
+        }
+
+        // Bundle update command
+        if use_color {
+            writeln!(
+                output,
+                "    {}$ bundle update {}{}",
+                DIM, remediation.name, RESET
+            )
+            .ok();
+        } else {
+            writeln!(output, "    $ bundle update {}", remediation.name).ok();
         }
     }
 }
@@ -324,7 +420,7 @@ mod tests {
             advisory_load_errors: 0,
         };
         let mut buf = Vec::new();
-        print_text(&report, &mut buf, false, false, false);
+        print_text(&report, &mut buf, false, false, false, false);
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("No vulnerabilities found"));
     }
@@ -338,7 +434,7 @@ mod tests {
             advisory_load_errors: 0,
         };
         let mut buf = Vec::new();
-        print_text(&report, &mut buf, false, true, false);
+        print_text(&report, &mut buf, false, true, false, false);
         let output = String::from_utf8(buf).unwrap();
         assert!(!output.contains("No vulnerabilities found"));
     }
@@ -347,7 +443,7 @@ mod tests {
     fn text_output_insecure_source() {
         let report = make_report_with_insecure_source();
         let mut buf = Vec::new();
-        print_text(&report, &mut buf, false, false, false);
+        print_text(&report, &mut buf, false, false, false, false);
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("Insecure Source URI found: http://rubygems.org/"));
         assert!(output.contains("Vulnerabilities found!"));
@@ -357,7 +453,7 @@ mod tests {
     fn text_output_unpatched_gem() {
         let report = make_report_with_vuln();
         let mut buf = Vec::new();
-        print_text(&report, &mut buf, false, false, false);
+        print_text(&report, &mut buf, false, false, false, false);
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("Name"));
         assert!(output.contains("test"));
@@ -384,7 +480,7 @@ mod tests {
             advisory_load_errors: 0,
         };
         let mut buf = Vec::new();
-        print_text(&report, &mut buf, true, false, false);
+        print_text(&report, &mut buf, true, false, false, false);
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("Description"));
         assert!(output.contains("Detailed description here."));
@@ -395,8 +491,366 @@ mod tests {
     fn text_output_no_color() {
         let report = make_report_with_vuln();
         let mut buf = Vec::new();
-        print_text(&report, &mut buf, false, false, false);
+        print_text(&report, &mut buf, false, false, false, false);
         let output = String::from_utf8(buf).unwrap();
         assert!(!output.contains("\x1b["));
+    }
+
+    #[test]
+    fn text_output_fix_shows_remediation() {
+        let report = make_report_with_vuln();
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, true);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("Remediation:"));
+        assert!(output.contains("test (0.5.0 -> upgrade to '>= 1.0.0')"));
+        assert!(output.contains("- CVE-2020-1234"));
+        assert!(output.contains("$ bundle update test"));
+    }
+
+    #[test]
+    fn text_output_fix_no_remediation_when_clean() {
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, true);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(!output.contains("Remediation:"));
+    }
+
+    fn make_report_with_multiple_vulns() -> Report {
+        let yaml1 = "---\ngem: test\ncve: 2020-1234\ntitle: First vuln\ncvss_v3: 9.8\npatched_versions:\n  - \">= 1.0.0\"\n";
+        let yaml2 = "---\ngem: test\ncve: 2020-5678\ntitle: Second vuln\ncvss_v3: 7.5\npatched_versions:\n  - \">= 1.2.0\"\n";
+        let adv1 = Advisory::from_yaml(yaml1, Path::new("CVE-2020-1234.yml")).unwrap();
+        let adv2 = Advisory::from_yaml(yaml2, Path::new("CVE-2020-5678.yml")).unwrap();
+        Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![
+                UnpatchedGem {
+                    name: "test".to_string(),
+                    version: "0.5.0".to_string(),
+                    advisory: adv1,
+                },
+                UnpatchedGem {
+                    name: "test".to_string(),
+                    version: "0.5.0".to_string(),
+                    advisory: adv2,
+                },
+            ],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        }
+    }
+
+    #[test]
+    fn text_output_fix_groups_multiple_advisories() {
+        let report = make_report_with_multiple_vulns();
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, true);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("Remediation:"));
+        // Should show both patched versions
+        assert!(output.contains("'>= 1.0.0'"));
+        assert!(output.contains("'>= 1.2.0'"));
+        // Should list both CVEs
+        assert!(output.contains("CVE-2020-1234"));
+        assert!(output.contains("CVE-2020-5678"));
+        // Should only have one "bundle update test" line
+        let update_count = output.matches("$ bundle update test").count();
+        assert_eq!(update_count, 1);
+    }
+
+    #[test]
+    fn text_output_without_fix_no_remediation() {
+        let report = make_report_with_vuln();
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(!output.contains("Remediation:"));
+        assert!(!output.contains("$ bundle update"));
+    }
+
+    // ========== Color Output ==========
+
+    #[test]
+    fn text_output_color_insecure_source() {
+        let report = make_report_with_insecure_source();
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("\x1b["));
+        assert!(output.contains("Insecure Source URI found:"));
+    }
+
+    #[test]
+    fn text_output_color_vulnerability() {
+        let report = make_report_with_vuln();
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("\x1b["));
+        // Red+bold for "Vulnerabilities found!"
+        assert!(output.contains(&format!("{}{}Vulnerabilities found!", RED, BOLD)));
+    }
+
+    #[test]
+    fn text_output_color_no_vulnerabilities() {
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        // Green+bold for "No vulnerabilities found"
+        assert!(output.contains(&format!("{}{}No vulnerabilities found", GREEN, BOLD)));
+    }
+
+    #[test]
+    fn text_output_color_criticality_medium() {
+        let yaml = "---\ngem: test\ncve: 2020-1234\ntitle: Test\ncvss_v3: 5.0\npatched_versions:\n  - \">= 1.0\"\n";
+        let advisory = Advisory::from_yaml(yaml, Path::new("CVE-2020-1234.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![UnpatchedGem {
+                name: "test".to_string(),
+                version: "0.5.0".to_string(),
+                advisory,
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        // Medium criticality should be yellow
+        assert!(output.contains(&format!("{}Medium{}", YELLOW, RESET)));
+    }
+
+    #[test]
+    fn text_output_color_criticality_high() {
+        let yaml = "---\ngem: test\ncve: 2020-1234\ntitle: Test\ncvss_v3: 7.5\npatched_versions:\n  - \">= 1.0\"\n";
+        let advisory = Advisory::from_yaml(yaml, Path::new("CVE-2020-1234.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![UnpatchedGem {
+                name: "test".to_string(),
+                version: "0.5.0".to_string(),
+                advisory,
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        // High criticality should be red+bold
+        assert!(output.contains(&format!("{}{}High{}", RED, BOLD, RESET)));
+    }
+
+    #[test]
+    fn text_output_color_criticality_low() {
+        let yaml = "---\ngem: test\ncve: 2020-1234\ntitle: Test\ncvss_v3: 2.0\npatched_versions:\n  - \">= 1.0\"\n";
+        let advisory = Advisory::from_yaml(yaml, Path::new("CVE-2020-1234.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![UnpatchedGem {
+                name: "test".to_string(),
+                version: "0.5.0".to_string(),
+                advisory,
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        // Low criticality should be plain (no extra color beyond the cyan label)
+        assert!(output.contains("Low"));
+    }
+
+    // ========== Warning Counts ==========
+
+    #[test]
+    fn text_output_warning_counts_plural() {
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            version_parse_errors: 3,
+            advisory_load_errors: 2,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("3 version parse errors"));
+        assert!(output.contains("2 advisory load errors"));
+    }
+
+    #[test]
+    fn text_output_warning_counts_singular() {
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            version_parse_errors: 1,
+            advisory_load_errors: 1,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("1 version parse error"));
+        assert!(!output.contains("1 version parse errors"));
+        assert!(output.contains("1 advisory load error"));
+        assert!(!output.contains("1 advisory load errors"));
+    }
+
+    #[test]
+    fn text_output_warning_counts_with_color() {
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            version_parse_errors: 1,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("\x1b["));
+        assert!(output.contains("1 version parse error"));
+    }
+
+    // ========== No Patch Available ==========
+
+    #[test]
+    fn text_output_no_patched_versions_solution() {
+        let yaml = "---\ngem: test\ncve: 2020-9999\ntitle: No fix yet\ncvss_v3: 9.0\n";
+        let advisory = Advisory::from_yaml(yaml, Path::new("CVE-2020-9999.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![UnpatchedGem {
+                name: "test".to_string(),
+                version: "0.5.0".to_string(),
+                advisory,
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("remove or disable this gem until a patch is available!"));
+    }
+
+    #[test]
+    fn text_output_no_patched_versions_solution_color() {
+        let yaml = "---\ngem: test\ncve: 2020-9999\ntitle: No fix yet\ncvss_v3: 9.0\n";
+        let advisory = Advisory::from_yaml(yaml, Path::new("CVE-2020-9999.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![UnpatchedGem {
+                name: "test".to_string(),
+                version: "0.5.0".to_string(),
+                advisory,
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("remove or disable this gem"));
+        assert!(output.contains("\x1b["));
+    }
+
+    #[test]
+    fn text_output_fix_no_patch_available() {
+        let yaml = "---\ngem: test\ncve: 2020-9999\ntitle: No fix yet\ncvss_v3: 9.0\n";
+        let advisory = Advisory::from_yaml(yaml, Path::new("CVE-2020-9999.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![UnpatchedGem {
+                name: "test".to_string(),
+                version: "0.5.0".to_string(),
+                advisory,
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, true);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("no patch available"));
+    }
+
+    // ========== Combined Report ==========
+
+    #[test]
+    fn text_output_combined_sources_and_gems() {
+        let yaml = "---\ngem: test\ncve: 2020-1234\ntitle: Test\ncvss_v3: 9.8\npatched_versions:\n  - \">= 1.0.0\"\n";
+        let advisory = Advisory::from_yaml(yaml, Path::new("CVE-2020-1234.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![
+                InsecureSource {
+                    source: "http://rubygems.org/".to_string(),
+                },
+                InsecureSource {
+                    source: "git://github.com/foo/bar.git".to_string(),
+                },
+            ],
+            unpatched_gems: vec![UnpatchedGem {
+                name: "test".to_string(),
+                version: "0.5.0".to_string(),
+                advisory,
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("2 insecure sources"));
+        assert!(output.contains("1 unpatched gem"));
+        assert!(output.contains("Insecure Source URI found: http://rubygems.org/"));
+        assert!(output.contains("Insecure Source URI found: git://github.com/foo/bar.git"));
+    }
+
+    // ========== Multiple gem separator ==========
+
+    #[test]
+    fn text_output_separator_between_multiple_gems() {
+        let report = make_report_with_multiple_vulns();
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, false);
+        let output = String::from_utf8(buf).unwrap();
+        // Should have separator between vulns
+        assert!(output.contains("─".repeat(40).as_str()));
+    }
+
+    #[test]
+    fn text_output_separator_with_color() {
+        let report = make_report_with_multiple_vulns();
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains(DIM));
+        assert!(output.contains("─".repeat(40).as_str()));
+    }
+
+    // ========== Color remediation ==========
+
+    #[test]
+    fn text_output_color_remediation() {
+        let report = make_report_with_vuln();
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, true);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("Remediation:"));
+        assert!(output.contains("\x1b["));
+        assert!(output.contains(BOLD));
     }
 }

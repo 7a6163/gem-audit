@@ -1,3 +1,21 @@
+### 2.2.0 / 2026-02-24
+
+#### Added
+
+* **Remediation suggestions** (`--fix`). When passed to `gem-audit check`,
+  appends a "Remediation" section that groups vulnerabilities by gem and
+  suggests upgrade paths with `bundle update` commands. This is a dry-run
+  flag — no files are modified.
+  * Text output shows grouped remediation with patched version ranges,
+    advisory IDs, and ready-to-run `bundle update` commands.
+  * JSON output adds a `remediations` array with `gem`, `current_version`,
+    `advisories`, `patched_versions`, and `command` fields.
+
+#### Internal
+
+* Extracted `format_timestamp` and `days_to_date` helpers into `src/util.rs`.
+* Expanded test suite from 176 to 253 tests (83.7% line coverage).
+
 ### 2.1.1 / 2026-02-16
 
 #### Fixed

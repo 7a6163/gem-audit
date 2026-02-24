@@ -3,4 +3,5 @@ pub mod configuration;
 pub mod format;
 pub mod lockfile;
 pub mod scanner;
+pub mod util;
 pub mod version;

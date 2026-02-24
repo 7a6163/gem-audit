@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::Path;
@@ -45,6 +45,17 @@ impl fmt::Display for UnpatchedGem {
     }
 }
 
+/// A grouped remediation suggestion for a single gem.
+#[derive(Debug)]
+pub struct Remediation {
+    /// The gem name.
+    pub name: String,
+    /// The currently installed version.
+    pub version: String,
+    /// All advisories affecting this gem (deduplicated by advisory ID).
+    pub advisories: Vec<Advisory>,
+}
+
 /// Aggregated scan report.
 #[derive(Debug)]
 pub struct Report {
@@ -65,6 +76,33 @@ impl Report {
     /// Total number of issues found.
     pub fn count(&self) -> usize {
         self.insecure_sources.len() + self.unpatched_gems.len()
+    }
+
+    /// Group unpatched gems into remediation suggestions.
+    ///
+    /// Groups vulnerabilities by gem name, deduplicates advisories (by ID),
+    /// and collects the union of all patched_versions across advisories.
+    pub fn remediations(&self) -> Vec<Remediation> {
+        let mut by_name: BTreeMap<&str, (&str, Vec<&Advisory>)> = BTreeMap::new();
+
+        for gem in &self.unpatched_gems {
+            let entry = by_name
+                .entry(&gem.name)
+                .or_insert((&gem.version, Vec::new()));
+            // Deduplicate advisories by ID
+            if !entry.1.iter().any(|a| a.id == gem.advisory.id) {
+                entry.1.push(&gem.advisory);
+            }
+        }
+
+        by_name
+            .into_iter()
+            .map(|(name, (version, advisories))| Remediation {
+                name: name.to_string(),
+                version: version.to_string(),
+                advisories: advisories.into_iter().cloned().collect(),
+            })
+            .collect()
     }
 }
 
@@ -603,5 +641,276 @@ mod tests {
         };
         assert!(!report.vulnerable());
         assert_eq!(report.count(), 0);
+    }
+
+    // ========== Remediations ==========
+
+    #[test]
+    fn remediations_empty_for_clean_report() {
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        assert!(report.remediations().is_empty());
+    }
+
+    #[test]
+    fn remediations_groups_by_gem_name() {
+        use crate::advisory::Advisory;
+
+        let yaml1 =
+            "---\ngem: test\ncve: 2020-1111\ncvss_v3: 9.0\npatched_versions:\n  - \">= 1.0.0\"\n";
+        let yaml2 =
+            "---\ngem: test\ncve: 2020-2222\ncvss_v3: 7.0\npatched_versions:\n  - \">= 1.2.0\"\n";
+        let yaml3 =
+            "---\ngem: other\ncve: 2020-3333\ncvss_v3: 5.0\npatched_versions:\n  - \">= 2.0.0\"\n";
+        let adv1 = Advisory::from_yaml(yaml1, Path::new("CVE-2020-1111.yml")).unwrap();
+        let adv2 = Advisory::from_yaml(yaml2, Path::new("CVE-2020-2222.yml")).unwrap();
+        let adv3 = Advisory::from_yaml(yaml3, Path::new("CVE-2020-3333.yml")).unwrap();
+
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![
+                UnpatchedGem {
+                    name: "test".to_string(),
+                    version: "0.5.0".to_string(),
+                    advisory: adv1,
+                },
+                UnpatchedGem {
+                    name: "test".to_string(),
+                    version: "0.5.0".to_string(),
+                    advisory: adv2,
+                },
+                UnpatchedGem {
+                    name: "other".to_string(),
+                    version: "1.0.0".to_string(),
+                    advisory: adv3,
+                },
+            ],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+
+        let remediations = report.remediations();
+        assert_eq!(remediations.len(), 2);
+
+        // BTreeMap orders alphabetically
+        assert_eq!(remediations[0].name, "other");
+        assert_eq!(remediations[0].version, "1.0.0");
+        assert_eq!(remediations[0].advisories.len(), 1);
+
+        assert_eq!(remediations[1].name, "test");
+        assert_eq!(remediations[1].version, "0.5.0");
+        assert_eq!(remediations[1].advisories.len(), 2);
+    }
+
+    #[test]
+    fn remediations_deduplicates_advisories() {
+        use crate::advisory::Advisory;
+
+        let yaml =
+            "---\ngem: test\ncve: 2020-1111\ncvss_v3: 9.0\npatched_versions:\n  - \">= 1.0.0\"\n";
+        let adv1 = Advisory::from_yaml(yaml, Path::new("CVE-2020-1111.yml")).unwrap();
+        let adv2 = Advisory::from_yaml(yaml, Path::new("CVE-2020-1111.yml")).unwrap();
+
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![
+                UnpatchedGem {
+                    name: "test".to_string(),
+                    version: "0.5.0".to_string(),
+                    advisory: adv1,
+                },
+                UnpatchedGem {
+                    name: "test".to_string(),
+                    version: "0.5.0".to_string(),
+                    advisory: adv2,
+                },
+            ],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+
+        let remediations = report.remediations();
+        assert_eq!(remediations.len(), 1);
+        assert_eq!(remediations[0].advisories.len(), 1);
+    }
+
+    // ========== Display Impls ==========
+
+    #[test]
+    fn insecure_source_display() {
+        let src = InsecureSource {
+            source: "http://rubygems.org/".to_string(),
+        };
+        assert_eq!(
+            src.to_string(),
+            "Insecure Source URI found: http://rubygems.org/"
+        );
+    }
+
+    #[test]
+    fn unpatched_gem_display() {
+        use crate::advisory::Advisory;
+        let yaml =
+            "---\ngem: test\ncve: 2020-1234\ncvss_v3: 9.0\npatched_versions:\n  - \">= 1.0\"\n";
+        let advisory = Advisory::from_yaml(yaml, Path::new("CVE-2020-1234.yml")).unwrap();
+        let gem = UnpatchedGem {
+            name: "test".to_string(),
+            version: "0.5.0".to_string(),
+            advisory,
+        };
+        assert_eq!(gem.to_string(), "test (0.5.0): CVE-2020-1234");
+    }
+
+    // ========== ScanError Display ==========
+
+    #[test]
+    fn scan_error_lockfile_not_found_display() {
+        let err = ScanError::LockfileNotFound("/tmp/missing".to_string());
+        assert!(err.to_string().contains("Gemfile.lock not found"));
+        assert!(err.to_string().contains("/tmp/missing"));
+    }
+
+    #[test]
+    fn scan_error_lockfile_parse_display() {
+        let err = ScanError::LockfileParse("bad content".to_string());
+        assert!(err.to_string().contains("failed to parse Gemfile.lock"));
+    }
+
+    #[test]
+    fn scan_error_io_display() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let err = ScanError::Io(io_err);
+        assert!(err.to_string().contains("IO error"));
+    }
+
+    // ========== ipv4_in_cidr edge cases ==========
+
+    #[test]
+    fn ipv4_in_cidr_prefix_zero_matches_any() {
+        // prefix_len = 0 means any address matches
+        assert!(ipv4_in_cidr(
+            Ipv4Addr::new(8, 8, 8, 8),
+            Ipv4Addr::new(0, 0, 0, 0),
+            0
+        ));
+        assert!(ipv4_in_cidr(
+            Ipv4Addr::new(192, 168, 1, 1),
+            Ipv4Addr::new(0, 0, 0, 0),
+            0
+        ));
+    }
+
+    #[test]
+    fn ipv4_in_cidr_prefix_32_exact_match() {
+        assert!(ipv4_in_cidr(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 1),
+            32
+        ));
+        assert!(!ipv4_in_cidr(
+            Ipv4Addr::new(10, 0, 0, 2),
+            Ipv4Addr::new(10, 0, 0, 1),
+            32
+        ));
+    }
+
+    // ========== extract_host edge cases ==========
+
+    #[test]
+    fn extract_host_no_scheme() {
+        assert_eq!(extract_host("not-a-url"), None);
+    }
+
+    #[test]
+    fn extract_host_empty_host() {
+        assert_eq!(extract_host("http:///path"), None);
+    }
+
+    // ========== Version parse error tracking ==========
+
+    #[test]
+    fn scan_specs_tracks_version_parse_errors() {
+        let input = "\
+GEM
+  remote: https://rubygems.org/
+  specs:
+    badgem (!!!invalid!!!)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  badgem
+";
+        let lockfile = lockfile::parse(input).unwrap();
+        let db = mock_database();
+        let scanner = Scanner::from_lockfile(lockfile, db);
+
+        let opts = ScanOptions::default();
+        let (_, version_parse_errors, _) = scanner.scan_specs(&opts);
+        assert!(
+            version_parse_errors > 0,
+            "expected version parse errors for invalid version"
+        );
+    }
+
+    #[test]
+    fn scan_specs_strict_mode_prints_warning() {
+        let input = "\
+GEM
+  remote: https://rubygems.org/
+  specs:
+    badgem (!!!invalid!!!)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  badgem
+";
+        let lockfile = lockfile::parse(input).unwrap();
+        let db = mock_database();
+        let scanner = Scanner::from_lockfile(lockfile, db);
+
+        let opts = ScanOptions {
+            strict: true,
+            ..Default::default()
+        };
+        let (_, version_parse_errors, _) = scanner.scan_specs(&opts);
+        assert!(version_parse_errors > 0);
+    }
+
+    // ========== Path source scanning ==========
+
+    #[test]
+    fn scan_path_source_is_safe() {
+        let input = "\
+PATH
+  remote: .
+  specs:
+    my_gem (0.1.0)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rack (2.0.0)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  my_gem!
+  rack
+";
+        let lockfile = lockfile::parse(input).unwrap();
+        let db = mock_database();
+        let scanner = Scanner::from_lockfile(lockfile, db);
+
+        let insecure = scanner.scan_sources();
+        assert!(insecure.is_empty(), "PATH sources should be safe");
     }
 }

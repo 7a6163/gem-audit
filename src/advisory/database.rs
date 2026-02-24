@@ -362,16 +362,7 @@ mod tests {
 
     #[test]
     fn open_fixture_advisory_dir() {
-        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-        // Create a mini advisory-db structure
-        let db_dir = fixture_dir.join("mock_db");
-        let gem_dir = db_dir.join("gems").join("test");
-        std::fs::create_dir_all(&gem_dir).unwrap();
-        std::fs::copy(
-            fixture_dir.join("advisory/CVE-2020-1234.yml"),
-            gem_dir.join("CVE-2020-1234.yml"),
-        )
-        .unwrap();
+        let (db_dir, _) = temp_mock_db("fixture");
 
         let db = Database::open(&db_dir).unwrap();
         assert!(!db.is_git());
@@ -388,7 +379,6 @@ mod tests {
         let (vulns, _errors) = db.check_gem("test", &Version::parse("1.0.0").unwrap());
         assert!(vulns.is_empty());
 
-        // Cleanup
         std::fs::remove_dir_all(&db_dir).unwrap();
     }
 
@@ -409,5 +399,102 @@ mod tests {
             "default path should contain ruby-advisory-db: {}",
             path_str
         );
+    }
+
+    // Helper: create an isolated temporary mock DB for tests that don't
+    // share state with `mock_database()` in scanner tests.
+    fn temp_mock_db(suffix: &str) -> (PathBuf, PathBuf) {
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let db_dir = std::env::temp_dir().join(format!("gem_audit_db_test_{}", suffix));
+        let _ = std::fs::remove_dir_all(&db_dir);
+        let gem_dir = db_dir.join("gems").join("test");
+        std::fs::create_dir_all(&gem_dir).unwrap();
+        std::fs::copy(
+            fixture_dir.join("advisory/CVE-2020-1234.yml"),
+            gem_dir.join("CVE-2020-1234.yml"),
+        )
+        .unwrap();
+        (db_dir, fixture_dir)
+    }
+
+    // ========== Database Display ==========
+
+    #[test]
+    fn database_display() {
+        let (db_dir, _) = temp_mock_db("display");
+        let db = Database::open(&db_dir).unwrap();
+        let display = db.to_string();
+        assert!(display.contains("gem_audit_db_test_display"));
+        std::fs::remove_dir_all(&db_dir).unwrap();
+    }
+
+    // ========== Database exists/path ==========
+
+    #[test]
+    fn database_exists_with_gems() {
+        let (db_dir, _) = temp_mock_db("exists");
+        let db = Database::open(&db_dir).unwrap();
+        assert!(db.exists());
+        assert!(db.path() == db_dir.as_path());
+        std::fs::remove_dir_all(&db_dir).unwrap();
+    }
+
+    // ========== Database advisories/size with mock ==========
+
+    #[test]
+    fn database_advisories_with_mock() {
+        let (db_dir, _) = temp_mock_db("advisories");
+        let db = Database::open(&db_dir).unwrap();
+        let all = db.advisories();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, "CVE-2020-1234");
+        std::fs::remove_dir_all(&db_dir).unwrap();
+    }
+
+    #[test]
+    fn database_size_with_mock() {
+        let (db_dir, _) = temp_mock_db("size");
+        let db = Database::open(&db_dir).unwrap();
+        assert_eq!(db.size(), 1);
+        std::fs::remove_dir_all(&db_dir).unwrap();
+    }
+
+    // ========== commit_id / last_updated_at for non-git ==========
+
+    #[test]
+    fn commit_id_none_for_non_git() {
+        let (db_dir, _) = temp_mock_db("nongit");
+        let db = Database::open(&db_dir).unwrap();
+        assert_eq!(db.commit_id(), None);
+        assert_eq!(db.last_updated_at(), None);
+        std::fs::remove_dir_all(&db_dir).unwrap();
+    }
+
+    // ========== DatabaseError Display ==========
+
+    #[test]
+    fn database_error_not_found_display() {
+        let err = DatabaseError::NotFound(PathBuf::from("/tmp/missing"));
+        assert!(err.to_string().contains("database not found"));
+        assert!(err.to_string().contains("/tmp/missing"));
+    }
+
+    #[test]
+    fn database_error_download_failed_display() {
+        let err = DatabaseError::DownloadFailed("network error".to_string());
+        assert!(err.to_string().contains("download failed"));
+        assert!(err.to_string().contains("network error"));
+    }
+
+    #[test]
+    fn database_error_update_failed_display() {
+        let err = DatabaseError::UpdateFailed("merge conflict".to_string());
+        assert!(err.to_string().contains("update failed"));
+    }
+
+    #[test]
+    fn database_error_git_display() {
+        let err = DatabaseError::Git("corrupt repo".to_string());
+        assert!(err.to_string().contains("git error"));
     }
 }

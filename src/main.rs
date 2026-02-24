@@ -10,6 +10,7 @@ use gem_audit::advisory::{Criticality, Database};
 use gem_audit::configuration::Configuration;
 use gem_audit::format::{self, OutputFormat};
 use gem_audit::scanner::{ScanOptions, Scanner};
+use gem_audit::util::format_timestamp;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -88,6 +89,10 @@ enum Commands {
         /// Treat parse/load warnings as errors (exit code 2)
         #[arg(long)]
         strict: bool,
+
+        /// Show remediation suggestions for vulnerable gems
+        #[arg(long)]
+        fix: bool,
     },
 
     /// Update the ruby-advisory-db
@@ -142,6 +147,7 @@ fn main() {
             max_db_age,
             fail_on_stale,
             strict,
+            fix,
         }) => cmd_check(
             &dir,
             quiet,
@@ -157,6 +163,7 @@ fn main() {
             max_db_age,
             fail_on_stale,
             strict,
+            fix,
         ),
         Some(Commands::Update { quiet, database }) => cmd_update(quiet, database.as_deref()),
         Some(Commands::Download { quiet, database }) => cmd_download(quiet, database.as_deref()),
@@ -180,6 +187,7 @@ fn main() {
                 None,
                 None,
                 None,
+                false,
                 false,
                 false,
             )
@@ -213,6 +221,7 @@ fn cmd_check(
     max_db_age: Option<u64>,
     fail_on_stale: bool,
     strict: bool,
+    fix: bool,
 ) -> i32 {
     let dir = Path::new(dir);
     if !dir.is_dir() {
@@ -345,10 +354,15 @@ fn cmd_check(
     match output_format {
         OutputFormat::Text => {
             let use_color = output_file.is_none() && is_tty;
-            format::print_text(&report, &mut output_handle, verbose, quiet, use_color);
+            format::print_text(&report, &mut output_handle, verbose, quiet, use_color, fix);
         }
         OutputFormat::Json => {
-            format::print_json(&report, &mut output_handle, is_tty && output_file.is_none());
+            format::print_json(
+                &report,
+                &mut output_handle,
+                is_tty && output_file.is_none(),
+                fix,
+            );
         }
     }
 
@@ -462,36 +476,4 @@ fn print_stats(db: &Database) {
     if let Some(commit) = db.commit_id() {
         println!("  commit:\t{}", commit);
     }
-}
-
-fn format_timestamp(seconds: i64) -> String {
-    // Simple UTC formatting without external deps
-    let days_since_epoch = seconds / 86400;
-    let time_of_day = seconds % 86400;
-    let hours = time_of_day / 3600;
-    let minutes = (time_of_day % 3600) / 60;
-    let secs = time_of_day % 60;
-
-    // Calculate date from days since epoch (1970-01-01)
-    let (year, month, day) = days_to_date(days_since_epoch);
-
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
-        year, month, day, hours, minutes, secs
-    )
-}
-
-fn days_to_date(days: i64) -> (i64, u32, u32) {
-    // Algorithm from https://howardhinnant.github.io/date_algorithms.html
-    let z = days + 719468;
-    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
-    let doe = (z - era * 146097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
 }

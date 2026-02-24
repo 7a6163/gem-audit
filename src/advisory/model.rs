@@ -405,4 +405,60 @@ mod tests {
         let adv = load_fixture();
         assert_eq!(adv.to_string(), "CVE-2020-1234");
     }
+
+    // ========== OSVDB ID ==========
+
+    #[test]
+    fn osvdb_id_with_value() {
+        let yaml = "---\ngem: test\nosvdb: 91452\npatched_versions:\n  - \">= 1.0\"\n";
+        let adv = Advisory::from_yaml(yaml, Path::new("OSVDB-91452.yml")).unwrap();
+        assert_eq!(adv.osvdb_id(), Some("OSVDB-91452".to_string()));
+    }
+
+    // ========== Criticality Display ==========
+
+    #[test]
+    fn criticality_display_all_variants() {
+        assert_eq!(Criticality::None.to_string(), "none");
+        assert_eq!(Criticality::Low.to_string(), "low");
+        assert_eq!(Criticality::Medium.to_string(), "medium");
+        assert_eq!(Criticality::High.to_string(), "high");
+        assert_eq!(Criticality::Critical.to_string(), "critical");
+    }
+
+    // ========== CVSS v2 Ranges ==========
+
+    #[test]
+    fn criticality_cvss_v2_low() {
+        let yaml = "---\ngem: test\ncvss_v2: 2.0\npatched_versions:\n  - \">= 1.0\"\n";
+        let adv = Advisory::from_yaml(yaml, Path::new("test.yml")).unwrap();
+        assert_eq!(adv.criticality(), Some(Criticality::Low));
+    }
+
+    #[test]
+    fn criticality_cvss_v2_medium() {
+        let yaml = "---\ngem: test\ncvss_v2: 5.0\npatched_versions:\n  - \">= 1.0\"\n";
+        let adv = Advisory::from_yaml(yaml, Path::new("test.yml")).unwrap();
+        assert_eq!(adv.criticality(), Some(Criticality::Medium));
+    }
+
+    // ========== AdvisoryError Display ==========
+
+    #[test]
+    fn advisory_error_invalid_requirement_display() {
+        let err = AdvisoryError::InvalidRequirement {
+            version_str: "bad".to_string(),
+            error: "parse error".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("bad"));
+        assert!(msg.contains("parse error"));
+    }
+
+    #[test]
+    fn advisory_error_yaml_display() {
+        let yaml_err = serde_yaml::from_str::<AdvisoryYaml>("not valid yaml {{{{").unwrap_err();
+        let err = AdvisoryError::Yaml(yaml_err);
+        assert!(err.to_string().contains("YAML parse error"));
+    }
 }

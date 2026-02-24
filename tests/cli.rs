@@ -334,3 +334,172 @@ fn download_already_exists() {
         .success()
         .stderr(predicate::str::contains("Database already exists"));
 }
+
+// ==================== check — nonexistent directory ====================
+
+#[test]
+fn check_nonexistent_directory() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "/nonexistent/directory/that/does/not/exist",
+            "--database",
+            mock_db().to_str().unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("No such file or directory"));
+}
+
+// ==================== check --fix (real DB) ====================
+
+#[test]
+fn check_fix_text_output() {
+    let Some(db) = real_db_path() else { return };
+
+    let output = Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--fix",
+            "--database",
+            db.to_str().unwrap(),
+            "--gemfile-lock",
+            fixtures_dir()
+                .join("unpatched_gems/Gemfile.lock")
+                .to_str()
+                .unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Remediation:"));
+    assert!(stdout.contains("bundle update"));
+}
+
+#[test]
+fn check_fix_json_output() {
+    let Some(db) = real_db_path() else { return };
+
+    let output = Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--fix",
+            "--format",
+            "json",
+            "--database",
+            db.to_str().unwrap(),
+            "--gemfile-lock",
+            fixtures_dir()
+                .join("unpatched_gems/Gemfile.lock")
+                .to_str()
+                .unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let remediations = parsed["remediations"].as_array().unwrap();
+    assert!(!remediations.is_empty());
+    assert!(
+        remediations[0]["command"]
+            .as_str()
+            .unwrap()
+            .starts_with("bundle update")
+    );
+}
+
+// ==================== check --fix on clean project ====================
+
+#[test]
+fn check_fix_no_remediation_when_clean() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--fix",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            fixtures_dir().join("secure/Gemfile.lock").to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("No vulnerabilities found")
+                .and(predicate::str::contains("Remediation:").not()),
+        );
+}
+
+// ==================== check --severity (real DB) ====================
+
+#[test]
+fn check_severity_filter() {
+    let Some(db) = real_db_path() else { return };
+
+    let all_output = Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--format",
+            "json",
+            "--database",
+            db.to_str().unwrap(),
+            "--gemfile-lock",
+            fixtures_dir()
+                .join("unpatched_gems/Gemfile.lock")
+                .to_str()
+                .unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let filtered_output = Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--format",
+            "json",
+            "--severity",
+            "critical",
+            "--database",
+            db.to_str().unwrap(),
+            "--gemfile-lock",
+            fixtures_dir()
+                .join("unpatched_gems/Gemfile.lock")
+                .to_str()
+                .unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let all: serde_json::Value = serde_json::from_slice(&all_output.stdout).unwrap();
+    let filtered: serde_json::Value = serde_json::from_slice(&filtered_output.stdout).unwrap();
+
+    let all_count = all["results"].as_array().unwrap().len();
+    let filtered_count = filtered["results"].as_array().unwrap().len();
+
+    assert!(
+        filtered_count <= all_count,
+        "severity filter should reduce or maintain result count: {} vs {}",
+        filtered_count,
+        all_count
+    );
+}
+
+// ==================== stats with mock DB ====================
+
+#[test]
+fn stats_with_mock_db() {
+    // The mock_db doesn't have a git repo, so commit/date info won't appear
+    // but it should still print the advisory count
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args(["stats", "--database", mock_db().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ruby-advisory-db:"));
+}

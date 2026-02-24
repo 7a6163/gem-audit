@@ -245,4 +245,59 @@ mod tests {
         let e3 = ConfigError::InvalidConfiguration("oops".to_string());
         assert!(e3.to_string().contains("oops"));
     }
+
+    // ========== Legacy Config Fallback ==========
+
+    #[test]
+    fn legacy_config_fallback() {
+        let tmp = std::env::temp_dir().join("gem_audit_test_legacy");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Only create the legacy file
+        std::fs::write(
+            tmp.join(".bundler-audit.yml"),
+            "---\nignore:\n  - CVE-LEGACY-001\n",
+        )
+        .unwrap();
+
+        // load_or_default with default name should fall back
+        let config = Configuration::load_or_default(&tmp.join(".gem-audit.yml")).unwrap();
+        assert!(config.ignore.contains("CVE-LEGACY-001"));
+
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn no_legacy_fallback_for_custom_name() {
+        // When a custom config name is used, legacy fallback should NOT apply
+        let config = Configuration::load_or_default(Path::new("/nonexistent/custom.yml")).unwrap();
+        assert!(config.ignore.is_empty());
+    }
+
+    // ========== YAML scalar root rejection ==========
+
+    #[test]
+    fn reject_yaml_scalar_root() {
+        let result = Configuration::from_yaml("hello");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ConfigError::InvalidConfiguration(msg) => {
+                assert!(msg.contains("expected a YAML mapping"));
+            }
+            other => panic!("expected InvalidConfiguration, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reject_yaml_sequence_root() {
+        let result = Configuration::from_yaml("- item1\n- item2\n");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ConfigError::InvalidConfiguration(msg) => {
+                assert!(msg.contains("expected a YAML mapping"));
+            }
+            other => panic!("expected InvalidConfiguration, got: {:?}", other),
+        }
+    }
 }
