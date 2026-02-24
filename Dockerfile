@@ -20,4 +20,4 @@ ENV GEM_AUDIT_DB=/usr/local/share/ruby-advisory-db
 WORKDIR /workspace
 
 ENTRYPOINT ["gem-audit"]
-CMD ["check"]
+CMD ["check", "--update"]
