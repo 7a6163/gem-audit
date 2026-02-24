@@ -262,8 +262,7 @@ mod tests {
         .unwrap();
 
         // load_or_default with default name should fall back
-        let config =
-            Configuration::load_or_default(&tmp.join(".gem-audit.yml")).unwrap();
+        let config = Configuration::load_or_default(&tmp.join(".gem-audit.yml")).unwrap();
         assert!(config.ignore.contains("CVE-LEGACY-001"));
 
         std::fs::remove_dir_all(&tmp).unwrap();
@@ -272,8 +271,7 @@ mod tests {
     #[test]
     fn no_legacy_fallback_for_custom_name() {
         // When a custom config name is used, legacy fallback should NOT apply
-        let config =
-            Configuration::load_or_default(Path::new("/nonexistent/custom.yml")).unwrap();
+        let config = Configuration::load_or_default(Path::new("/nonexistent/custom.yml")).unwrap();
         assert!(config.ignore.is_empty());
     }
 

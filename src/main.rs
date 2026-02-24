@@ -477,4 +477,3 @@ fn print_stats(db: &Database) {
         println!("  commit:\t{}", commit);
     }
 }
-

@@ -216,10 +216,7 @@ DEPENDENCIES
             section: "GEM".to_string(),
             field: "remote".to_string(),
         };
-        assert_eq!(
-            err.to_string(),
-            "missing field 'remote' in section 'GEM'"
-        );
+        assert_eq!(err.to_string(), "missing field 'remote' in section 'GEM'");
     }
 
     #[test]

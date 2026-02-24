@@ -660,15 +660,15 @@ mod tests {
     fn remediations_groups_by_gem_name() {
         use crate::advisory::Advisory;
 
-        let yaml1 = "---\ngem: test\ncve: 2020-1111\ncvss_v3: 9.0\npatched_versions:\n  - \">= 1.0.0\"\n";
-        let yaml2 = "---\ngem: test\ncve: 2020-2222\ncvss_v3: 7.0\npatched_versions:\n  - \">= 1.2.0\"\n";
-        let yaml3 = "---\ngem: other\ncve: 2020-3333\ncvss_v3: 5.0\npatched_versions:\n  - \">= 2.0.0\"\n";
-        let adv1 =
-            Advisory::from_yaml(yaml1, Path::new("CVE-2020-1111.yml")).unwrap();
-        let adv2 =
-            Advisory::from_yaml(yaml2, Path::new("CVE-2020-2222.yml")).unwrap();
-        let adv3 =
-            Advisory::from_yaml(yaml3, Path::new("CVE-2020-3333.yml")).unwrap();
+        let yaml1 =
+            "---\ngem: test\ncve: 2020-1111\ncvss_v3: 9.0\npatched_versions:\n  - \">= 1.0.0\"\n";
+        let yaml2 =
+            "---\ngem: test\ncve: 2020-2222\ncvss_v3: 7.0\npatched_versions:\n  - \">= 1.2.0\"\n";
+        let yaml3 =
+            "---\ngem: other\ncve: 2020-3333\ncvss_v3: 5.0\npatched_versions:\n  - \">= 2.0.0\"\n";
+        let adv1 = Advisory::from_yaml(yaml1, Path::new("CVE-2020-1111.yml")).unwrap();
+        let adv2 = Advisory::from_yaml(yaml2, Path::new("CVE-2020-2222.yml")).unwrap();
+        let adv3 = Advisory::from_yaml(yaml3, Path::new("CVE-2020-3333.yml")).unwrap();
 
         let report = Report {
             insecure_sources: vec![],
@@ -710,11 +710,10 @@ mod tests {
     fn remediations_deduplicates_advisories() {
         use crate::advisory::Advisory;
 
-        let yaml = "---\ngem: test\ncve: 2020-1111\ncvss_v3: 9.0\npatched_versions:\n  - \">= 1.0.0\"\n";
-        let adv1 =
-            Advisory::from_yaml(yaml, Path::new("CVE-2020-1111.yml")).unwrap();
-        let adv2 =
-            Advisory::from_yaml(yaml, Path::new("CVE-2020-1111.yml")).unwrap();
+        let yaml =
+            "---\ngem: test\ncve: 2020-1111\ncvss_v3: 9.0\npatched_versions:\n  - \">= 1.0.0\"\n";
+        let adv1 = Advisory::from_yaml(yaml, Path::new("CVE-2020-1111.yml")).unwrap();
+        let adv2 = Advisory::from_yaml(yaml, Path::new("CVE-2020-1111.yml")).unwrap();
 
         let report = Report {
             insecure_sources: vec![],
@@ -755,7 +754,8 @@ mod tests {
     #[test]
     fn unpatched_gem_display() {
         use crate::advisory::Advisory;
-        let yaml = "---\ngem: test\ncve: 2020-1234\ncvss_v3: 9.0\npatched_versions:\n  - \">= 1.0\"\n";
+        let yaml =
+            "---\ngem: test\ncve: 2020-1234\ncvss_v3: 9.0\npatched_versions:\n  - \">= 1.0\"\n";
         let advisory = Advisory::from_yaml(yaml, Path::new("CVE-2020-1234.yml")).unwrap();
         let gem = UnpatchedGem {
             name: "test".to_string(),

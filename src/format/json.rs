@@ -55,8 +55,7 @@ pub fn print_json(report: &Report, output: &mut dyn Write, pretty: bool, fix: bo
             .map(|r| {
                 let advisory_ids: Vec<String> = r.advisories.iter().map(|a| a.id.clone()).collect();
                 let mut all_patched: Vec<String> = Vec::new();
-                let mut seen: std::collections::HashSet<String> =
-                    std::collections::HashSet::new();
+                let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
                 for adv in &r.advisories {
                     for pv in &adv.patched_versions {
                         let s = pv.to_string();

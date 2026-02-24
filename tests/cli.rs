@@ -404,7 +404,12 @@ fn check_fix_json_output() {
     let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let remediations = parsed["remediations"].as_array().unwrap();
     assert!(!remediations.is_empty());
-    assert!(remediations[0]["command"].as_str().unwrap().starts_with("bundle update"));
+    assert!(
+        remediations[0]["command"]
+            .as_str()
+            .unwrap()
+            .starts_with("bundle update")
+    );
 }
 
 // ==================== check --fix on clean project ====================

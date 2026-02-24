@@ -750,10 +750,7 @@ BUNDLED WITH
    2.3.6
 ";
         let lockfile = parse(input).unwrap();
-        assert_eq!(
-            lockfile.ruby_version,
-            Some("ruby 3.0.0p0".to_string())
-        );
+        assert_eq!(lockfile.ruby_version, Some("ruby 3.0.0p0".to_string()));
     }
 
     #[test]
