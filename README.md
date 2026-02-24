@@ -252,6 +252,74 @@ Only fail on high and critical vulnerabilities:
 
 [gem-audit-action]: https://github.com/7a6163/gem-audit-action
 
+## Docker
+
+A Docker image is available for running gem-audit in any CI environment:
+
+```
+$ docker build -t gem-audit .
+$ docker run --rm -v $(pwd):/workspace gem-audit check
+```
+
+The image uses `gcr.io/distroless/cc-debian13` as the runtime base and
+pre-downloads the [ruby-advisory-db] at build time for fast offline scans.
+
+### CI Examples
+
+**GitLab CI:**
+
+```yaml
+gem-audit:
+  image: ghcr.io/7a6163/gem-audit:latest
+  script:
+    - gem-audit check
+```
+
+**CircleCI:**
+
+```yaml
+jobs:
+  gem-audit:
+    docker:
+      - image: ghcr.io/7a6163/gem-audit:latest
+    steps:
+      - checkout
+      - run: gem-audit check
+```
+
+**Bitbucket Pipelines:**
+
+```yaml
+pipelines:
+  default:
+    - step:
+        name: gem-audit
+        image: ghcr.io/7a6163/gem-audit:latest
+        script:
+          - gem-audit check
+```
+
+**Drone CI:**
+
+```yaml
+steps:
+  - name: gem-audit
+    image: ghcr.io/7a6163/gem-audit:latest
+    commands:
+      - gem-audit check
+```
+
+**Azure Pipelines:**
+
+```yaml
+jobs:
+  - job: gem_audit
+    container: ghcr.io/7a6163/gem-audit:latest
+    steps:
+      - checkout: self
+      - script: gem-audit check
+```
+
 ## Performance
 
 Benchmarked with [hyperfine] on Apple M-series, comparing against Ruby bundler-audit 0.9.2:
