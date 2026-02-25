@@ -26,6 +26,9 @@ pub fn print_text(
 ) {
     let total_sources = report.insecure_sources.len();
     let total_gems = report.unpatched_gems.len();
+    let total_rubies = report.vulnerable_rubies.len();
+    let has_more_after_sources =
+        !report.unpatched_gems.is_empty() || !report.vulnerable_rubies.is_empty();
 
     for (i, source) in report.insecure_sources.iter().enumerate() {
         if use_color {
@@ -39,14 +42,26 @@ pub fn print_text(
             writeln!(output, "Insecure Source URI found: {}", source.source).ok();
         }
 
-        if i < total_sources - 1 || !report.unpatched_gems.is_empty() {
+        if i < total_sources - 1 || has_more_after_sources {
             writeln!(output).ok();
         }
     }
 
     for (i, vuln) in report.unpatched_gems.iter().enumerate() {
         print_advisory(output, vuln, verbose, use_color);
-        if i < total_gems - 1 {
+        if i < total_gems - 1 || total_rubies > 0 {
+            if use_color {
+                writeln!(output, "{}{}{}", DIM, "─".repeat(40), RESET).ok();
+            } else {
+                writeln!(output, "{}", "─".repeat(40)).ok();
+            }
+            writeln!(output).ok();
+        }
+    }
+
+    for (i, vuln) in report.vulnerable_rubies.iter().enumerate() {
+        print_ruby_advisory(output, vuln, verbose, use_color);
+        if i < total_rubies - 1 {
             if use_color {
                 writeln!(output, "{}{}{}", DIM, "─".repeat(40), RESET).ok();
             } else {
@@ -71,6 +86,13 @@ pub fn print_text(
                 "{} unpatched gem{}",
                 total_gems,
                 if total_gems == 1 { "" } else { "s" }
+            ));
+        }
+        if total_rubies > 0 {
+            parts.push(format!(
+                "{} vulnerable Ruby version{}",
+                total_rubies,
+                if total_rubies == 1 { "" } else { "s" }
             ));
         }
         let summary = parts.join(", ");
@@ -361,6 +383,144 @@ fn print_advisory(
     writeln!(output).ok();
 }
 
+fn print_ruby_advisory(
+    output: &mut dyn Write,
+    vuln: &crate::scanner::VulnerableRuby,
+    verbose: bool,
+    use_color: bool,
+) {
+    let adv = &vuln.advisory;
+
+    label_value(output, "Engine", &vuln.engine, use_color);
+    label_value(output, "Version", &vuln.version, use_color);
+
+    if let Some(cve_id) = adv.cve_id() {
+        label_value(output, "CVE", &cve_id, use_color);
+    }
+
+    if let Some(ghsa_id) = adv.ghsa_id() {
+        label_value(output, "GHSA", &ghsa_id, use_color);
+    }
+
+    // Criticality
+    let crit_str = match adv.criticality() {
+        Some(Criticality::None) => "None",
+        Some(Criticality::Low) => "Low",
+        Some(Criticality::Medium) => "Medium",
+        Some(Criticality::High) => "High",
+        Some(Criticality::Critical) => "Critical",
+        None => "Unknown",
+    };
+
+    if use_color {
+        let colored_value = match adv.criticality() {
+            Some(Criticality::High) => format!("{}{}{}{}", RED, BOLD, crit_str, RESET),
+            Some(Criticality::Critical) => format!("{}{}{}{}", RED, BOLD, crit_str, RESET),
+            Some(Criticality::Medium) => format!("{}{}{}", YELLOW, crit_str, RESET),
+            _ => crit_str.to_string(),
+        };
+        writeln!(
+            output,
+            "{}{:>width$}:{} {}",
+            CYAN,
+            "Criticality",
+            RESET,
+            colored_value,
+            width = LABEL_WIDTH
+        )
+        .ok();
+    } else {
+        writeln!(
+            output,
+            "{:>width$}: {}",
+            "Criticality",
+            crit_str,
+            width = LABEL_WIDTH
+        )
+        .ok();
+    }
+
+    if let Some(url) = &adv.url {
+        label_value(output, "URL", url, use_color);
+    }
+
+    if verbose {
+        if let Some(desc) = &adv.description {
+            if use_color {
+                writeln!(
+                    output,
+                    "{}{:>width$}:{}",
+                    CYAN,
+                    "Description",
+                    RESET,
+                    width = LABEL_WIDTH
+                )
+                .ok();
+            } else {
+                writeln!(output, "{:>width$}:", "Description", width = LABEL_WIDTH).ok();
+            }
+            for line in desc.lines() {
+                writeln!(output, "{:>width$}  {}", "", line, width = LABEL_WIDTH).ok();
+            }
+        }
+    } else if let Some(title) = &adv.title {
+        label_value(output, "Title", title, use_color);
+    }
+
+    // Solution
+    if !adv.patched_versions.is_empty() {
+        let versions: Vec<String> = adv
+            .patched_versions
+            .iter()
+            .map(|v| format!("'{}'", v))
+            .collect();
+        if use_color {
+            writeln!(
+                output,
+                "{}{:>width$}:{} upgrade Ruby to {}",
+                CYAN,
+                "Solution",
+                RESET,
+                versions.join(", "),
+                width = LABEL_WIDTH
+            )
+            .ok();
+        } else {
+            writeln!(
+                output,
+                "{:>width$}: upgrade Ruby to {}",
+                "Solution",
+                versions.join(", "),
+                width = LABEL_WIDTH
+            )
+            .ok();
+        }
+    } else if use_color {
+        writeln!(
+            output,
+            "{}{:>width$}:{} {}{}upgrade Ruby to a patched version!{}",
+            CYAN,
+            "Solution",
+            RESET,
+            RED,
+            BOLD,
+            RESET,
+            width = LABEL_WIDTH
+        )
+        .ok();
+    } else {
+        writeln!(
+            output,
+            "{:>width$}: upgrade Ruby to a patched version!",
+            "Solution",
+            width = LABEL_WIDTH
+        )
+        .ok();
+    }
+
+    writeln!(output).ok();
+}
+
 fn label_value(output: &mut dyn Write, label: &str, value: &str, use_color: bool) {
     if use_color {
         writeln!(
@@ -391,6 +551,7 @@ mod tests {
                 source: "http://rubygems.org/".to_string(),
             }],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         }
@@ -406,6 +567,7 @@ mod tests {
                 version: "0.5.0".to_string(),
                 advisory,
             }],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         }
@@ -416,6 +578,7 @@ mod tests {
         let report = Report {
             insecure_sources: vec![],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -430,6 +593,7 @@ mod tests {
         let report = Report {
             insecure_sources: vec![],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -476,6 +640,7 @@ mod tests {
                 version: "0.5.0".to_string(),
                 advisory,
             }],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -513,6 +678,7 @@ mod tests {
         let report = Report {
             insecure_sources: vec![],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -541,6 +707,7 @@ mod tests {
                     advisory: adv2,
                 },
             ],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         }
@@ -602,6 +769,7 @@ mod tests {
         let report = Report {
             insecure_sources: vec![],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -623,6 +791,7 @@ mod tests {
                 version: "0.5.0".to_string(),
                 advisory,
             }],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -644,6 +813,7 @@ mod tests {
                 version: "0.5.0".to_string(),
                 advisory,
             }],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -665,6 +835,7 @@ mod tests {
                 version: "0.5.0".to_string(),
                 advisory,
             }],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -682,6 +853,7 @@ mod tests {
         let report = Report {
             insecure_sources: vec![],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 3,
             advisory_load_errors: 2,
         };
@@ -697,6 +869,7 @@ mod tests {
         let report = Report {
             insecure_sources: vec![],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 1,
             advisory_load_errors: 1,
         };
@@ -714,6 +887,7 @@ mod tests {
         let report = Report {
             insecure_sources: vec![],
             unpatched_gems: vec![],
+            vulnerable_rubies: vec![],
             version_parse_errors: 1,
             advisory_load_errors: 0,
         };
@@ -737,6 +911,7 @@ mod tests {
                 version: "0.5.0".to_string(),
                 advisory,
             }],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -757,6 +932,7 @@ mod tests {
                 version: "0.5.0".to_string(),
                 advisory,
             }],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -778,6 +954,7 @@ mod tests {
                 version: "0.5.0".to_string(),
                 advisory,
             }],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -807,6 +984,7 @@ mod tests {
                 version: "0.5.0".to_string(),
                 advisory,
             }],
+            vulnerable_rubies: vec![],
             version_parse_errors: 0,
             advisory_load_errors: 0,
         };
@@ -839,6 +1017,348 @@ mod tests {
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains(DIM));
         assert!(output.contains("─".repeat(40).as_str()));
+    }
+
+    // ========== Ruby Advisory Output ==========
+
+    fn make_ruby_advisory() -> crate::advisory::Advisory {
+        let yaml = "---\nengine: ruby\ncve: 2021-31810\nghsa: xxxx-yyyy-zzzz\nurl: https://www.ruby-lang.org/en/news/2021/07/07/\ntitle: Trusting FTP PASV responses vulnerability in Net::FTP\ncvss_v3: 5.9\npatched_versions:\n  - \">= 3.0.2\"\n  - \"~> 2.7.4\"\n  - \"~> 2.6.8\"\n";
+        crate::advisory::Advisory::from_yaml(yaml, Path::new("CVE-2021-31810.yml")).unwrap()
+    }
+
+    fn make_report_with_ruby_vuln() -> Report {
+        Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            vulnerable_rubies: vec![crate::scanner::VulnerableRuby {
+                engine: "ruby".to_string(),
+                version: "2.6.0".to_string(),
+                advisory: make_ruby_advisory(),
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        }
+    }
+
+    #[test]
+    fn text_output_ruby_vulnerability_plain() {
+        let report = make_report_with_ruby_vuln();
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("Engine: ruby"));
+        assert!(output.contains("Version: 2.6.0"));
+        assert!(output.contains("CVE-2021-31810"));
+        assert!(output.contains("GHSA-xxxx-yyyy-zzzz"));
+        assert!(output.contains("Medium"));
+        assert!(output.contains("https://www.ruby-lang.org"));
+        assert!(output.contains("Trusting FTP PASV"));
+        assert!(output.contains("upgrade Ruby to '>= 3.0.2'"));
+        assert!(output.contains("1 vulnerable Ruby version"));
+        assert!(!output.contains("\x1b["));
+    }
+
+    #[test]
+    fn text_output_ruby_vulnerability_color() {
+        let report = make_report_with_ruby_vuln();
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("\x1b["));
+        assert!(output.contains("Engine"));
+        assert!(output.contains("ruby"));
+        assert!(output.contains("upgrade Ruby to"));
+        // Medium criticality should be yellow
+        assert!(output.contains(&format!("{}Medium{}", YELLOW, RESET)));
+    }
+
+    #[test]
+    fn text_output_ruby_vulnerability_verbose() {
+        let yaml = "---\nengine: ruby\ncve: 2021-31810\ntitle: Test\ndescription: |\n  Detailed ruby vulnerability description.\ncvss_v3: 5.9\npatched_versions:\n  - \">= 3.0.2\"\n";
+        let advisory =
+            crate::advisory::Advisory::from_yaml(yaml, Path::new("CVE-2021-31810.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            vulnerable_rubies: vec![crate::scanner::VulnerableRuby {
+                engine: "ruby".to_string(),
+                version: "2.6.0".to_string(),
+                advisory,
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, true, false, false, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("Description"));
+        assert!(output.contains("Detailed ruby vulnerability description."));
+        assert!(!output.contains("Title"));
+    }
+
+    #[test]
+    fn text_output_ruby_vulnerability_verbose_color() {
+        let yaml = "---\nengine: ruby\ncve: 2021-31810\ntitle: Test\ndescription: |\n  Detailed description.\ncvss_v3: 5.9\npatched_versions:\n  - \">= 3.0.2\"\n";
+        let advisory =
+            crate::advisory::Advisory::from_yaml(yaml, Path::new("CVE-2021-31810.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            vulnerable_rubies: vec![crate::scanner::VulnerableRuby {
+                engine: "ruby".to_string(),
+                version: "2.6.0".to_string(),
+                advisory,
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, true, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("\x1b["));
+        assert!(output.contains("Description"));
+        assert!(output.contains("Detailed description."));
+    }
+
+    #[test]
+    fn text_output_ruby_no_patched_versions_plain() {
+        let yaml = "---\nengine: ruby\ncve: 2021-99999\ntitle: No fix\ncvss_v3: 9.0\n";
+        let advisory =
+            crate::advisory::Advisory::from_yaml(yaml, Path::new("CVE-2021-99999.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            vulnerable_rubies: vec![crate::scanner::VulnerableRuby {
+                engine: "ruby".to_string(),
+                version: "2.6.0".to_string(),
+                advisory,
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("upgrade Ruby to a patched version!"));
+        assert!(!output.contains("\x1b["));
+    }
+
+    #[test]
+    fn text_output_ruby_no_patched_versions_color() {
+        let yaml = "---\nengine: ruby\ncve: 2021-99999\ntitle: No fix\ncvss_v3: 9.0\n";
+        let advisory =
+            crate::advisory::Advisory::from_yaml(yaml, Path::new("CVE-2021-99999.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            vulnerable_rubies: vec![crate::scanner::VulnerableRuby {
+                engine: "ruby".to_string(),
+                version: "2.6.0".to_string(),
+                advisory,
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("upgrade Ruby to a patched version!"));
+        assert!(output.contains("\x1b["));
+    }
+
+    #[test]
+    fn text_output_ruby_high_criticality_color() {
+        let yaml = "---\nengine: ruby\ncve: 2021-99999\ntitle: High severity\ncvss_v3: 8.0\npatched_versions:\n  - \">= 3.0.2\"\n";
+        let advisory =
+            crate::advisory::Advisory::from_yaml(yaml, Path::new("CVE-2021-99999.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            vulnerable_rubies: vec![crate::scanner::VulnerableRuby {
+                engine: "ruby".to_string(),
+                version: "2.6.0".to_string(),
+                advisory,
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains(&format!("{}{}High{}", RED, BOLD, RESET)));
+    }
+
+    #[test]
+    fn text_output_ruby_critical_criticality_color() {
+        let yaml = "---\nengine: ruby\ncve: 2021-99999\ntitle: Critical severity\ncvss_v3: 9.5\npatched_versions:\n  - \">= 3.0.2\"\n";
+        let advisory =
+            crate::advisory::Advisory::from_yaml(yaml, Path::new("CVE-2021-99999.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            vulnerable_rubies: vec![crate::scanner::VulnerableRuby {
+                engine: "ruby".to_string(),
+                version: "2.6.0".to_string(),
+                advisory,
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains(&format!("{}{}Critical{}", RED, BOLD, RESET)));
+    }
+
+    #[test]
+    fn text_output_gems_and_rubies_separator() {
+        let gem_yaml = "---\ngem: test\ncve: 2020-1234\ntitle: Test\ncvss_v3: 9.8\npatched_versions:\n  - \">= 1.0.0\"\n";
+        let gem_advisory =
+            crate::advisory::Advisory::from_yaml(gem_yaml, Path::new("CVE-2020-1234.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![UnpatchedGem {
+                name: "test".to_string(),
+                version: "0.5.0".to_string(),
+                advisory: gem_advisory,
+            }],
+            vulnerable_rubies: vec![crate::scanner::VulnerableRuby {
+                engine: "ruby".to_string(),
+                version: "2.6.0".to_string(),
+                advisory: make_ruby_advisory(),
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, false);
+        let output = String::from_utf8(buf).unwrap();
+        // Should contain both gem and ruby info
+        assert!(output.contains("Name: test"));
+        assert!(output.contains("Engine: ruby"));
+        // Should have separator between them
+        assert!(output.contains("─".repeat(40).as_str()));
+        // Summary should include both counts
+        assert!(output.contains("1 unpatched gem"));
+        assert!(output.contains("1 vulnerable Ruby version"));
+    }
+
+    #[test]
+    fn text_output_gems_and_rubies_separator_color() {
+        let gem_yaml = "---\ngem: test\ncve: 2020-1234\ntitle: Test\ncvss_v3: 9.8\npatched_versions:\n  - \">= 1.0.0\"\n";
+        let gem_advisory =
+            crate::advisory::Advisory::from_yaml(gem_yaml, Path::new("CVE-2020-1234.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![UnpatchedGem {
+                name: "test".to_string(),
+                version: "0.5.0".to_string(),
+                advisory: gem_advisory,
+            }],
+            vulnerable_rubies: vec![crate::scanner::VulnerableRuby {
+                engine: "ruby".to_string(),
+                version: "2.6.0".to_string(),
+                advisory: make_ruby_advisory(),
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains(DIM));
+        assert!(output.contains("─".repeat(40).as_str()));
+    }
+
+    #[test]
+    fn text_output_multiple_ruby_vulns_separator() {
+        let yaml1 = "---\nengine: ruby\ncve: 2021-31810\ntitle: First\ncvss_v3: 5.9\npatched_versions:\n  - \">= 3.0.2\"\n";
+        let yaml2 = "---\nengine: ruby\ncve: 2021-99999\ntitle: Second\ncvss_v3: 7.5\npatched_versions:\n  - \">= 3.1.0\"\n";
+        let adv1 =
+            crate::advisory::Advisory::from_yaml(yaml1, Path::new("CVE-2021-31810.yml")).unwrap();
+        let adv2 =
+            crate::advisory::Advisory::from_yaml(yaml2, Path::new("CVE-2021-99999.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            vulnerable_rubies: vec![
+                crate::scanner::VulnerableRuby {
+                    engine: "ruby".to_string(),
+                    version: "2.6.0".to_string(),
+                    advisory: adv1,
+                },
+                crate::scanner::VulnerableRuby {
+                    engine: "ruby".to_string(),
+                    version: "2.6.0".to_string(),
+                    advisory: adv2,
+                },
+            ],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("2 vulnerable Ruby versions"));
+        // Separator between the two ruby vulns
+        assert!(output.contains("─".repeat(40).as_str()));
+    }
+
+    #[test]
+    fn text_output_multiple_ruby_vulns_separator_color() {
+        let yaml1 = "---\nengine: ruby\ncve: 2021-31810\ntitle: First\ncvss_v3: 5.9\npatched_versions:\n  - \">= 3.0.2\"\n";
+        let yaml2 = "---\nengine: ruby\ncve: 2021-99999\ntitle: Second\ncvss_v3: 7.5\npatched_versions:\n  - \">= 3.1.0\"\n";
+        let adv1 =
+            crate::advisory::Advisory::from_yaml(yaml1, Path::new("CVE-2021-31810.yml")).unwrap();
+        let adv2 =
+            crate::advisory::Advisory::from_yaml(yaml2, Path::new("CVE-2021-99999.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            vulnerable_rubies: vec![
+                crate::scanner::VulnerableRuby {
+                    engine: "ruby".to_string(),
+                    version: "2.6.0".to_string(),
+                    advisory: adv1,
+                },
+                crate::scanner::VulnerableRuby {
+                    engine: "ruby".to_string(),
+                    version: "2.6.0".to_string(),
+                    advisory: adv2,
+                },
+            ],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains(DIM));
+        assert!(output.contains("─".repeat(40).as_str()));
+    }
+
+    #[test]
+    fn text_output_ruby_no_url_no_ghsa() {
+        let yaml = "---\nengine: ruby\ncve: 2021-99999\ntitle: Minimal advisory\ncvss_v3: 5.0\npatched_versions:\n  - \">= 3.0.2\"\n";
+        let advisory =
+            crate::advisory::Advisory::from_yaml(yaml, Path::new("CVE-2021-99999.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![],
+            vulnerable_rubies: vec![crate::scanner::VulnerableRuby {
+                engine: "ruby".to_string(),
+                version: "2.6.0".to_string(),
+                advisory,
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("Engine: ruby"));
+        assert!(!output.contains("GHSA"));
+        assert!(!output.contains("URL"));
     }
 
     // ========== Color remediation ==========

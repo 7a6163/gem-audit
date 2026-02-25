@@ -6,6 +6,15 @@ use serde::Deserialize;
 
 use crate::version::{Requirement, Version};
 
+/// Distinguishes gem advisories from Ruby interpreter advisories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdvisoryKind {
+    /// Advisory for a RubyGem (loaded from `gems/` directory).
+    Gem,
+    /// Advisory for a Ruby interpreter (loaded from `rubies/` directory).
+    Ruby,
+}
+
 /// The criticality level of a vulnerability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum Criticality {
@@ -31,7 +40,10 @@ impl fmt::Display for Criticality {
 /// Raw YAML structure for deserialization.
 #[derive(Debug, Deserialize)]
 struct AdvisoryYaml {
-    gem: String,
+    #[serde(default)]
+    gem: Option<String>,
+    #[serde(default)]
+    engine: Option<String>,
     #[serde(default)]
     cve: Option<String>,
     #[serde(default)]
@@ -64,8 +76,10 @@ struct AdvisoryYaml {
 pub struct Advisory {
     /// The advisory identifier (filename without .yml).
     pub id: String,
-    /// The affected gem name.
-    pub gem: String,
+    /// The affected gem or Ruby engine name.
+    pub name: String,
+    /// Whether this advisory is for a gem or a Ruby interpreter.
+    pub kind: AdvisoryKind,
     /// CVE identifier (e.g., "2020-1234").
     pub cve: Option<String>,
     /// OSVDB identifier.
@@ -100,6 +114,8 @@ pub enum AdvisoryError {
     Yaml(#[from] serde_yaml::Error),
     #[error("invalid requirement '{version_str}': {error}")]
     InvalidRequirement { version_str: String, error: String },
+    #[error("advisory {path} is missing both 'gem' and 'engine' fields")]
+    MissingField { path: String },
 }
 
 impl Advisory {
@@ -119,6 +135,16 @@ impl Advisory {
 
         let raw: AdvisoryYaml = serde_yaml::from_str(yaml)?;
 
+        let (name, kind) = match (raw.gem, raw.engine) {
+            (Some(gem), _) => (gem, AdvisoryKind::Gem),
+            (None, Some(engine)) => (engine, AdvisoryKind::Ruby),
+            (None, None) => {
+                return Err(AdvisoryError::MissingField {
+                    path: path.display().to_string(),
+                });
+            }
+        };
+
         let patched_versions =
             parse_version_requirements(raw.patched_versions.as_deref().unwrap_or(&[]))?;
         let unaffected_versions =
@@ -126,7 +152,8 @@ impl Advisory {
 
         Ok(Advisory {
             id,
-            gem: raw.gem,
+            name,
+            kind,
             cve: raw.cve,
             osvdb: raw.osvdb,
             ghsa: raw.ghsa,
@@ -251,7 +278,8 @@ mod tests {
     fn load_advisory_from_yaml() {
         let adv = load_fixture();
         assert_eq!(adv.id, "CVE-2020-1234");
-        assert_eq!(adv.gem, "test");
+        assert_eq!(adv.name, "test");
+        assert_eq!(adv.kind, AdvisoryKind::Gem);
         assert_eq!(adv.cve, Some("2020-1234".to_string()));
         assert_eq!(adv.ghsa, Some("aaaa-bbbb-cccc".to_string()));
         assert_eq!(adv.url, Some("https://example.com/".to_string()));
@@ -382,7 +410,7 @@ mod tests {
         let yaml = "---\ngem: minimal\npatched_versions:\n  - \">= 1.0\"\n";
         let adv = Advisory::from_yaml(yaml, Path::new("GHSA-test.yml")).unwrap();
         assert_eq!(adv.id, "GHSA-test");
-        assert_eq!(adv.gem, "minimal");
+        assert_eq!(adv.name, "minimal");
         assert!(adv.cve.is_none());
         assert!(adv.ghsa.is_none());
         assert!(adv.osvdb.is_none());
@@ -453,6 +481,32 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("bad"));
         assert!(msg.contains("parse error"));
+    }
+
+    #[test]
+    fn advisory_with_engine_field() {
+        let yaml = "---\nengine: ruby\ncve: 2021-31810\npatched_versions:\n  - \">= 2.6.7\"\n";
+        let adv = Advisory::from_yaml(yaml, Path::new("CVE-2021-31810.yml")).unwrap();
+        assert_eq!(adv.name, "ruby");
+        assert_eq!(adv.kind, AdvisoryKind::Ruby);
+    }
+
+    #[test]
+    fn advisory_missing_gem_and_engine() {
+        let yaml = "---\ncve: 2020-9999\npatched_versions:\n  - \">= 1.0\"\n";
+        let result = Advisory::from_yaml(yaml, Path::new("CVE-2020-9999.yml"));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("missing both"));
+    }
+
+    #[test]
+    fn advisory_error_missing_field_display() {
+        let err = AdvisoryError::MissingField {
+            path: "test.yml".to_string(),
+        };
+        assert!(err.to_string().contains("missing both"));
+        assert!(err.to_string().contains("test.yml"));
     }
 
     #[test]

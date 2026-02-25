@@ -1,6 +1,8 @@
 mod parser;
+mod ruby_version;
 
 pub use parser::parse;
+pub use ruby_version::RubyVersion;
 
 use thiserror::Error;
 
@@ -32,6 +34,13 @@ impl Lockfile {
     /// Find all gem specs by name (including platform variants).
     pub fn find_specs(&self, name: &str) -> Vec<&GemSpec> {
         self.specs.iter().filter(|s| s.name == name).collect()
+    }
+
+    /// Parse the `RUBY VERSION` section into a `RubyVersion`.
+    ///
+    /// Returns `None` if the section is absent or cannot be parsed.
+    pub fn parsed_ruby_version(&self) -> Option<RubyVersion> {
+        self.ruby_version.as_deref().and_then(RubyVersion::parse)
     }
 }
 

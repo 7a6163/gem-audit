@@ -1,3 +1,38 @@
+### 2.3.0 / 2026-02-25
+
+#### Added
+
+* **Ruby interpreter version scanning.** gem-audit now checks the `RUBY VERSION`
+  section of `Gemfile.lock` against known CVEs in the `rubies/` directory of
+  [ruby-advisory-db]. Inspired by [ruby_audit](https://github.com/civisanalytics/ruby_audit).
+  * Detects vulnerable Ruby interpreter versions (ruby, jruby, mruby, etc.).
+  * Text output shows "Engine" and "Version" with "upgrade Ruby to" solutions.
+  * JSON output adds `"type": "vulnerable_ruby"` entries with
+    `"ruby": { "engine": ..., "version": ... }` structure.
+  * Summary line includes "N vulnerable Ruby version(s)" alongside gem counts.
+  * `--ignore` and `--severity` filters apply to Ruby advisories too.
+* `gem-audit stats` now shows separate gem and Ruby advisory counts.
+
+#### Changed
+
+* **Renamed `Advisory.gem` to `Advisory.name`.** The field now generically
+  represents both gem names and Ruby engine names. Added `Advisory.kind`
+  (`AdvisoryKind::Gem` or `AdvisoryKind::Ruby`) to distinguish the two.
+* Advisory YAML files with an `engine:` field (instead of `gem:`) are now
+  supported. Files missing both fields produce an `AdvisoryError::MissingField`
+  error.
+
+#### Internal
+
+* Extracted `ScanOptions::should_report()` to deduplicate ignore/severity
+  filtering logic between gem and Ruby scanning.
+* Extracted `advisory_to_json()` helper in the JSON formatter.
+* Refactored `Database::size()` into a shared `count_advisories_in()` helper,
+  reused by `rubies_size()`.
+* Added `RubyVersion` parser (`src/lockfile/ruby_version.rs`) with patchlevel
+  stripping and engine extraction.
+* Expanded test suite from 253 to 284 tests.
+
 ### 2.2.0 / 2026-02-24
 
 #### Added
