@@ -100,9 +100,7 @@ impl Report {
 
     /// Total number of issues found.
     pub fn count(&self) -> usize {
-        self.insecure_sources.len()
-            + self.unpatched_gems.len()
-            + self.vulnerable_rubies.len()
+        self.insecure_sources.len() + self.unpatched_gems.len() + self.vulnerable_rubies.len()
     }
 
     /// Group unpatched gems into remediation suggestions.
@@ -309,8 +307,7 @@ impl Scanner {
             Err(_) => return (Vec::new(), 0),
         };
 
-        let (advisories, load_errors) =
-            self.database.check_ruby(&ruby_version.engine, &version);
+        let (advisories, load_errors) = self.database.check_ruby(&ruby_version.engine, &version);
 
         let mut results = Vec::new();
         for advisory in advisories {

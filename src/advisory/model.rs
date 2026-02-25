@@ -141,7 +141,7 @@ impl Advisory {
             (None, None) => {
                 return Err(AdvisoryError::MissingField {
                     path: path.display().to_string(),
-                })
+                });
             }
         };
 
@@ -485,8 +485,7 @@ mod tests {
 
     #[test]
     fn advisory_with_engine_field() {
-        let yaml =
-            "---\nengine: ruby\ncve: 2021-31810\npatched_versions:\n  - \">= 2.6.7\"\n";
+        let yaml = "---\nengine: ruby\ncve: 2021-31810\npatched_versions:\n  - \">= 2.6.7\"\n";
         let adv = Advisory::from_yaml(yaml, Path::new("CVE-2021-31810.yml")).unwrap();
         assert_eq!(adv.name, "ruby");
         assert_eq!(adv.kind, AdvisoryKind::Ruby);

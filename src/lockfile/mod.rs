@@ -40,9 +40,7 @@ impl Lockfile {
     ///
     /// Returns `None` if the section is absent or cannot be parsed.
     pub fn parsed_ruby_version(&self) -> Option<RubyVersion> {
-        self.ruby_version
-            .as_deref()
-            .and_then(RubyVersion::parse)
+        self.ruby_version.as_deref().and_then(RubyVersion::parse)
     }
 }
 

@@ -14,6 +14,7 @@ gem install required.
 ## Features
 
 * Checks for vulnerable versions of gems in `Gemfile.lock`.
+* Checks the Ruby interpreter version against known CVEs.
 * Checks for insecure gem sources (`http://` and `git://`).
 * Allows ignoring specific advisories via CLI flags or a configuration file.
 * Filters by severity threshold (`--severity`).
@@ -124,6 +125,21 @@ Show remediation suggestions (dry-run, no files modified):
 
 ```
 $ gem-audit check --fix
+```
+
+The Ruby interpreter version from the `RUBY VERSION` section is also checked:
+
+```
+$ gem-audit
+      Engine: ruby
+     Version: 2.6.0
+         CVE: CVE-2021-31810
+ Criticality: Medium
+         URL: https://www.ruby-lang.org/en/news/2021/07/07/...
+       Title: Trusting FTP PASV responses vulnerability in Net::FTP
+    Solution: upgrade Ruby to '>= 3.0.2', '~> 2.7.4', '~> 2.6.8'
+
+Vulnerabilities found! (1 vulnerable Ruby version)
 ```
 
 ## Commands
@@ -283,6 +299,7 @@ Both use the same [ruby-advisory-db] and produce equivalent output.
 | Advisory database | [ruby-advisory-db] | [ruby-advisory-db] |
 | Git implementation | [gix] (pure Rust) | System Git CLI |
 | Vulnerability check | Yes | Yes |
+| Ruby version check | Yes | No (see [ruby_audit]) |
 | Insecure source check | Yes | Yes |
 | Ignore advisories | `--ignore` + config file | `--ignore` + config file |
 | Output formats | Text, JSON | Text, JSON |
@@ -303,6 +320,7 @@ Both use the same [ruby-advisory-db] and produce equivalent output.
 
 * **Zero dependencies** -- no Ruby, Bundler, or Git required. Drop a single binary into any CI image.
 * **15-29x faster** -- finishes in milliseconds, ideal for pre-commit hooks and fast CI pipelines.
+* **Ruby version scanning** -- checks the interpreter version against CVEs, built-in (no extra gem like [ruby_audit] needed).
 * **Severity filtering** -- only fail on `high` or `critical` vulnerabilities with `--severity`.
 * **Database freshness** -- `--max-db-age` and `--fail-on-stale` ensure your advisory data is never outdated.
 * **Strict mode** -- treat parse/load warnings as errors for stricter CI policies.
@@ -317,20 +335,21 @@ Both use the same [ruby-advisory-db] and produce equivalent output.
 
 ```
 src/
-  version/          # RubyGems version parsing and comparison
-    gem_version.rs  # Gem::Version semantics (segments, ordering, bump)
-    requirement.rs  # Gem::Requirement with all 7 operators (=, !=, >, <, >=, <=, ~>)
-  lockfile/         # Gemfile.lock parser
-    parser.rs       # State-machine parser with indentation tracking
-  advisory/         # Advisory database
-    model.rs        # Advisory YAML deserialization, vulnerability checking, CVSS
-    database.rs     # Database clone/update via gix, advisory enumeration
-  scanner.rs        # Ties lockfile + database; source & spec scanning
-  configuration.rs  # .gem-audit.yml loading and validation
-  format/           # Output formatters
-    text.rs         # Human-readable text with ANSI colors
-    json.rs         # JSON output with serde_json
-  main.rs           # CLI (clap)
+  version/            # RubyGems version parsing and comparison
+    gem_version.rs    # Gem::Version semantics (segments, ordering, bump)
+    requirement.rs    # Gem::Requirement with all 7 operators (=, !=, >, <, >=, <=, ~>)
+  lockfile/           # Gemfile.lock parser
+    parser.rs         # State-machine parser with indentation tracking
+    ruby_version.rs   # Ruby interpreter version parser (engine + patchlevel stripping)
+  advisory/           # Advisory database
+    model.rs          # Advisory YAML deserialization, vulnerability checking, CVSS
+    database.rs       # Database clone/update via gix, advisory enumeration
+  scanner.rs          # Ties lockfile + database; source, spec & Ruby scanning
+  configuration.rs    # .gem-audit.yml loading and validation
+  format/             # Output formatters
+    text.rs           # Human-readable text with ANSI colors
+    json.rs           # JSON output with serde_json
+  main.rs             # CLI (clap)
 ```
 
 ## License
@@ -339,6 +358,7 @@ MIT. See [LICENSE.md](LICENSE.md) for details.
 
 [Bundler]: https://bundler.io
 [bundler-audit]: https://github.com/rubysec/bundler-audit
+[ruby_audit]: https://github.com/civisanalytics/ruby_audit
 [ruby-advisory-db]: https://github.com/rubysec/ruby-advisory-db
 [gix]: https://github.com/Byron/gitoxide
 [hyperfine]: https://github.com/sharkdp/hyperfine
