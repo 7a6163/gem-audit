@@ -1,3 +1,18 @@
+### 2.3.1 / 2026-02-25
+
+#### Fixed
+
+* Docker image switched from `distroless/cc-debian13` to `alpine` so the image
+  can be used directly as a GitLab CI job image (distroless has no shell).
+  Builder stage likewise updated to `rust:alpine` (musl libc).
+
+#### Documentation
+
+* Added CI usage examples to README, including `--update` flag recommendation
+  and a stricter `--max-db-age 1 --fail-on-stale` variant.
+
+---
+
 ### 2.3.0 / 2026-02-25
 
 #### Added
