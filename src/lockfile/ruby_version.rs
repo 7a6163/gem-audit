@@ -21,11 +21,6 @@ impl RubyVersion {
     pub fn parse(input: &str) -> Option<Self> {
         let trimmed = input.trim();
         let (engine, version_raw) = trimmed.split_once(' ')?;
-
-        if engine.is_empty() || version_raw.is_empty() {
-            return None;
-        }
-
         let version = strip_patchlevel(version_raw);
 
         Some(RubyVersion {

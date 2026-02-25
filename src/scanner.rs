@@ -839,6 +839,19 @@ mod tests {
         assert_eq!(gem.to_string(), "test (0.5.0): CVE-2020-1234");
     }
 
+    #[test]
+    fn vulnerable_ruby_display() {
+        use crate::advisory::Advisory;
+        let yaml = "---\nengine: ruby\ncve: 2021-31810\ncvss_v3: 5.9\npatched_versions:\n  - \">= 3.0.2\"\n";
+        let advisory = Advisory::from_yaml(yaml, Path::new("CVE-2021-31810.yml")).unwrap();
+        let ruby = VulnerableRuby {
+            engine: "ruby".to_string(),
+            version: "2.6.0".to_string(),
+            advisory,
+        };
+        assert_eq!(ruby.to_string(), "ruby (2.6.0): CVE-2021-31810");
+    }
+
     // ========== ScanError Display ==========
 
     #[test]
