@@ -127,6 +127,26 @@ Show remediation suggestions (dry-run, no files modified):
 $ gem-audit check --fix
 ```
 
+Use in CI (always update the advisory database before checking):
+
+```
+$ gem-audit check --update
+```
+
+A minimal GitHub Actions example:
+
+```yaml
+- name: Audit gems
+  run: gem-audit check --update
+```
+
+For stricter CI enforcement — fail if the database couldn't be updated or is stale:
+
+```yaml
+- name: Audit gems
+  run: gem-audit check --update --max-db-age 1 --fail-on-stale
+```
+
 The Ruby interpreter version from the `RUBY VERSION` section is also checked:
 
 ```

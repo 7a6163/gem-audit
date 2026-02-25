@@ -1,4 +1,6 @@
-FROM rust:bookworm AS builder
+FROM rust:alpine AS builder
+
+RUN apk add --no-cache musl-dev git
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
@@ -10,7 +12,9 @@ RUN cargo build --release && strip target/release/gem-audit
 RUN mkdir -p /root/.local/share && target/release/gem-audit download --quiet
 
 # -----------------------------------------------------------
-FROM gcr.io/distroless/cc-debian13
+FROM alpine
+
+RUN apk add --no-cache ca-certificates git
 
 COPY --from=builder /build/target/release/gem-audit /usr/local/bin/gem-audit
 COPY --from=builder /root/.local/share/ruby-advisory-db /usr/local/share/ruby-advisory-db
