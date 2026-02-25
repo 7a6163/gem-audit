@@ -147,6 +147,18 @@ For stricter CI enforcement — fail if the database couldn't be updated or is s
   run: gem-audit check --update --max-db-age 1 --fail-on-stale
 ```
 
+To use the Docker image directly in GitLab CI, override the entrypoint so the runner
+can execute shell scripts inside the container:
+
+```yaml
+audit:
+  image:
+    name: ghcr.io/7a6163/gem-audit
+    entrypoint: [""]
+  script:
+    - gem-audit check --update
+```
+
 The Ruby interpreter version from the `RUBY VERSION` section is also checked:
 
 ```

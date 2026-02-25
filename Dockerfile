@@ -19,4 +19,6 @@ COPY --from=builder /root/.local/share/ruby-advisory-db /usr/local/share/ruby-ad
 ENV GEM_AUDIT_DB=/usr/local/share/ruby-advisory-db
 
 WORKDIR /workspace
-CMD ["gem-audit", "check", "--update"]
+
+ENTRYPOINT ["gem-audit"]
+CMD ["check", "--update"]
