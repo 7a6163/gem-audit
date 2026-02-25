@@ -2,9 +2,9 @@
 
 #### Fixed
 
-* Docker image switched from `distroless/cc-debian13` to `alpine` so the image
-  can be used directly as a GitLab CI job image (distroless has no shell).
-  Builder stage likewise updated to `rust:alpine` (musl libc).
+* Docker image switched from `distroless/cc-debian13` to `distroless/cc-debian13:debug`
+  so the image can be used directly as a GitLab CI job image. The debug variant
+  ships busybox (`/bin/sh`) while keeping the same glibc runtime and minimal footprint.
 
 #### Documentation
 
