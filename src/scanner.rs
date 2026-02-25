@@ -1077,6 +1077,63 @@ DEPENDENCIES
     }
 
     #[test]
+    fn scan_ruby_severity_threshold_met() {
+        // CVE-2021-31810 has cvss_v3=5.9 (Medium), filter for Medium should include it
+        let input = include_str!("../tests/fixtures/vulnerable_ruby/Gemfile.lock");
+        let lockfile = lockfile::parse(input).unwrap();
+        let db = mock_database();
+        let scanner = Scanner::from_lockfile(lockfile, db);
+
+        let opts = ScanOptions {
+            severity: Some(Criticality::Medium),
+            ..Default::default()
+        };
+        let (vulns, _) = scanner.scan_ruby(&opts);
+        assert_eq!(vulns.len(), 1);
+    }
+
+    #[test]
+    fn scan_ruby_unparseable_version() {
+        let input = "\
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rack (2.0.0)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  rack
+
+RUBY VERSION
+   ruby !!!invalid!!!
+";
+        let lockfile = lockfile::parse(input).unwrap();
+        let db = mock_database();
+        let scanner = Scanner::from_lockfile(lockfile, db);
+
+        let opts = ScanOptions::default();
+        let (vulns, _) = scanner.scan_ruby(&opts);
+        assert!(vulns.is_empty());
+    }
+
+    #[test]
+    fn should_report_ignore_nonmatching() {
+        let mut ignore = HashSet::new();
+        ignore.insert("CVE-9999-0000".to_string());
+        let opts = ScanOptions {
+            ignore,
+            ..Default::default()
+        };
+        let yaml =
+            "---\ngem: test\ncve: 2020-1234\ncvss_v3: 9.0\npatched_versions:\n  - \">= 1.0\"\n";
+        let advisory =
+            crate::advisory::Advisory::from_yaml(yaml, Path::new("CVE-2020-1234.yml")).unwrap();
+        assert!(opts.should_report(&advisory));
+    }
+
+    #[test]
     fn report_count_includes_ruby_vulns() {
         let input = include_str!("../tests/fixtures/vulnerable_ruby/Gemfile.lock");
         let lockfile = lockfile::parse(input).unwrap();

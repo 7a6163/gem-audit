@@ -1338,6 +1338,53 @@ mod tests {
     }
 
     #[test]
+    fn text_output_sources_and_rubies_no_gems() {
+        let report = Report {
+            insecure_sources: vec![InsecureSource {
+                source: "http://rubygems.org/".to_string(),
+            }],
+            unpatched_gems: vec![],
+            vulnerable_rubies: vec![crate::scanner::VulnerableRuby {
+                engine: "ruby".to_string(),
+                version: "2.6.0".to_string(),
+                advisory: make_ruby_advisory(),
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, false, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("Insecure Source URI found: http://rubygems.org/"));
+        assert!(output.contains("Engine: ruby"));
+        assert!(output.contains("1 insecure source"));
+        assert!(output.contains("1 vulnerable Ruby version"));
+    }
+
+    #[test]
+    fn text_output_sources_and_rubies_no_gems_color() {
+        let report = Report {
+            insecure_sources: vec![InsecureSource {
+                source: "http://rubygems.org/".to_string(),
+            }],
+            unpatched_gems: vec![],
+            vulnerable_rubies: vec![crate::scanner::VulnerableRuby {
+                engine: "ruby".to_string(),
+                version: "2.6.0".to_string(),
+                advisory: make_ruby_advisory(),
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let mut buf = Vec::new();
+        print_text(&report, &mut buf, false, false, true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("\x1b["));
+        assert!(output.contains("Insecure Source URI found:"));
+        assert!(output.contains("Engine"));
+    }
+
+    #[test]
     fn text_output_ruby_no_url_no_ghsa() {
         let yaml = "---\nengine: ruby\ncve: 2021-99999\ntitle: Minimal advisory\ncvss_v3: 5.0\npatched_versions:\n  - \">= 3.0.2\"\n";
         let advisory =
