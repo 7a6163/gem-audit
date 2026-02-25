@@ -11,7 +11,7 @@ RUN mkdir -p /root/.local/share && target/release/gem-audit download --quiet
 
 # -----------------------------------------------------------
 # Use the debug variant which includes busybox (/bin/sh) for CI compatibility
-FROM gcr.io/distroless/cc-debian13
+FROM gcr.io/distroless/cc-debian13:debug
 
 COPY --from=builder /build/target/release/gem-audit /usr/local/bin/gem-audit
 COPY --from=builder /root/.local/share/ruby-advisory-db /usr/local/share/ruby-advisory-db
@@ -19,6 +19,4 @@ COPY --from=builder /root/.local/share/ruby-advisory-db /usr/local/share/ruby-ad
 ENV GEM_AUDIT_DB=/usr/local/share/ruby-advisory-db
 
 WORKDIR /workspace
-
-ENTRYPOINT ["gem-audit"]
-CMD ["check", "--update"]
+CMD ["gem-audit", "check", "--update"]
