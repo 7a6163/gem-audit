@@ -147,17 +147,27 @@ For stricter CI enforcement — fail if the database couldn't be updated or is s
   run: gem-audit check --update --max-db-age 1 --fail-on-stale
 ```
 
-To use the Docker image directly in GitLab CI, override the entrypoint so the runner
-can execute shell scripts inside the container:
+To use the Docker image in GitLab CI, use the CI cache to store the advisory
+database in a writable directory. This avoids git locking issues that can occur
+on container overlay filesystems:
 
 ```yaml
 audit:
   image:
     name: ghcr.io/7a6163/gem-audit
     entrypoint: [""]
+  variables:
+    GEM_AUDIT_DB: "$CI_PROJECT_DIR/.ruby-advisory-db"
+  cache:
+    key: ruby-advisory-db
+    paths:
+      - .ruby-advisory-db/
   script:
     - gem-audit check --update
 ```
+
+The first run clones the advisory database into the cache. Subsequent runs
+restore it from cache and fetch only the latest changes.
 
 The Ruby interpreter version from the `RUBY VERSION` section is also checked:
 

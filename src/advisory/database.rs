@@ -66,11 +66,23 @@ impl Database {
     }
 
     /// Update the database by fetching from origin and fast-forwarding.
+    ///
+    /// If the git fetch fails (e.g. due to ref-update issues in containerised environments),
+    /// falls back to a fresh clone so the update always succeeds.
     pub fn update(&self) -> Result<bool, DatabaseError> {
         if !self.is_git() {
             return Ok(false);
         }
 
+        if self.try_fetch().is_err() {
+            return self.reclone();
+        }
+
+        self.checkout_head()
+    }
+
+    /// Attempt a git fetch from origin.  Returns `Err` on any failure.
+    fn try_fetch(&self) -> Result<(), DatabaseError> {
         let repo = gix::open(&self.path).map_err(|e| DatabaseError::Git(e.to_string()))?;
 
         let remote = repo
@@ -82,13 +94,17 @@ impl Database {
             .connect(gix::remote::Direction::Fetch)
             .map_err(|e| DatabaseError::UpdateFailed(e.to_string()))?;
 
-        let _outcome = connection
+        connection
             .prepare_fetch(gix::progress::Discard, Default::default())
             .map_err(|e| DatabaseError::UpdateFailed(e.to_string()))?
             .receive(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
             .map_err(|e| DatabaseError::UpdateFailed(e.to_string()))?;
 
-        // Checkout the updated HEAD to working tree
+        Ok(())
+    }
+
+    /// Checkout the current HEAD into the working tree.
+    fn checkout_head(&self) -> Result<bool, DatabaseError> {
         let repo = gix::open(&self.path).map_err(|e| DatabaseError::Git(e.to_string()))?;
         let tree = repo
             .head_commit()
@@ -120,6 +136,16 @@ impl Database {
         )
         .map_err(|e| DatabaseError::UpdateFailed(e.to_string()))?;
 
+        Ok(true)
+    }
+
+    /// Delete the existing DB and re-clone from scratch.
+    fn reclone(&self) -> Result<bool, DatabaseError> {
+        let tmp = self.path.with_extension("_update_tmp");
+        let _ = std::fs::remove_dir_all(&tmp);
+        Database::download(&tmp, true)?;
+        std::fs::remove_dir_all(&self.path).map_err(DatabaseError::Io)?;
+        std::fs::rename(&tmp, &self.path).map_err(DatabaseError::Io)?;
         Ok(true)
     }
 

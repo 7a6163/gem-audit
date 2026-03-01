@@ -278,8 +278,8 @@ fn cmd_check(
                 }
             }
             Err(e) => {
-                eprintln!("Failed to update advisory database: {}", e);
-                return EXIT_ERROR;
+                // Update failed but the existing DB is still usable — warn and continue.
+                eprintln!("warning: Failed to update advisory database: {}", e);
             }
         }
     }

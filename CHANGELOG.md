@@ -1,3 +1,23 @@
+### 2.3.2 / 2026-03-01
+
+#### Fixed
+
+* `update()` now falls back to a fresh clone if the git fetch ref-update step
+  fails, preventing CI failures caused by gix locking issues on container
+  overlay filesystems (overlayfs).
+* `--update` failure when the database already exists is now a warning rather
+  than a fatal error; the scan continues with the existing database.
+* Removed the advisory database pre-download from the Docker image. The database
+  is no longer baked into the image layers, eliminating git ref-update failures
+  in containerised CI environments.
+
+#### Documentation
+
+* Updated GitLab CI example to use `GEM_AUDIT_DB` + CI cache, storing the
+  advisory database in a writable directory outside the container image layers.
+
+---
+
 ### 2.3.1 / 2026-02-25
 
 #### Fixed
@@ -5,11 +25,20 @@
 * Docker image switched from `distroless/cc-debian13` to `distroless/cc-debian13:debug`
   so the image can be used directly as a GitLab CI job image. The debug variant
   ships busybox (`/bin/sh`) while keeping the same glibc runtime and minimal footprint.
+* Removed the advisory database pre-download from the Docker image. The database
+  is no longer baked into the image layers, eliminating git ref-update failures
+  caused by container overlay filesystems (overlayfs).
+* `update()` now falls back to a fresh clone if the git fetch ref-update step
+  fails, preventing CI failures due to transient gix locking issues.
+* `--update` failure when the database already exists is now a warning rather
+  than a fatal error, so the scan continues with the existing database.
 
 #### Documentation
 
-* Added CI usage examples to README, including `--update` flag recommendation
-  and a stricter `--max-db-age 1 --fail-on-stale` variant.
+* Updated GitLab CI example in README to use `GEM_AUDIT_DB` and CI cache,
+  which stores the advisory database in a proper writable directory and avoids
+  overlay filesystem locking issues.
+* Added `--update` flag recommendation and stricter `--max-db-age 1 --fail-on-stale` variant.
 
 ---
 
