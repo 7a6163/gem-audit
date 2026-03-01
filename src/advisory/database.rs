@@ -74,7 +74,8 @@ impl Database {
             return Ok(false);
         }
 
-        if self.try_fetch().is_err() {
+        if let Err(e) = self.try_fetch() {
+            eprintln!("warning: git fetch failed ({}), re-cloning ...", e);
             return self.reclone();
         }
 
@@ -140,12 +141,40 @@ impl Database {
     }
 
     /// Delete the existing DB and re-clone from scratch.
+    ///
+    /// Uses an atomic swap: clone to a sibling `_tmp` directory, rename the
+    /// existing DB to `_old`, rename `_tmp` to the final path, then remove
+    /// `_old`.  This ensures `self.path` always contains a valid database.
     fn reclone(&self) -> Result<bool, DatabaseError> {
-        let tmp = self.path.with_extension("_update_tmp");
+        // Derive sibling paths by appending a suffix to the directory name,
+        // avoiding `with_extension()` which replaces rather than appends.
+        let tmp = {
+            let mut p = self.path.clone().into_os_string();
+            p.push("_tmp");
+            PathBuf::from(p)
+        };
+        let old = {
+            let mut p = self.path.clone().into_os_string();
+            p.push("_old");
+            PathBuf::from(p)
+        };
+
+        // Clean up any leftover from a previous failed attempt.
         let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&old);
+
+        // Clone into tmp, then atomically swap with the live DB.
         Database::download(&tmp, true)?;
-        std::fs::remove_dir_all(&self.path).map_err(DatabaseError::Io)?;
-        std::fs::rename(&tmp, &self.path).map_err(DatabaseError::Io)?;
+        std::fs::rename(&self.path, &old).map_err(DatabaseError::Io)?;
+        std::fs::rename(&tmp, &self.path).map_err(|e| {
+            // Best-effort rollback: restore the old DB before returning the error.
+            let _ = std::fs::rename(&old, &self.path);
+            DatabaseError::Io(e)
+        })?;
+
+        // Remove old DB (best-effort, failure is non-fatal).
+        let _ = std::fs::remove_dir_all(&old);
+
         Ok(true)
     }
 
