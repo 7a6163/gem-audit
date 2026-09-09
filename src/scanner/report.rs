@@ -287,4 +287,33 @@ mod tests {
         };
         assert_eq!(ruby.to_string(), "ruby (2.6.0): CVE-2021-31810");
     }
+
+    #[test]
+    fn report_count_sums_all_three_kinds() {
+        let gem_yaml = "---\ngem: test\ncve: 2020-1111\npatched_versions:\n  - \">= 1.0\"\n";
+        let ruby_yaml = "---\nengine: ruby\ncve: 2021-31810\npatched_versions:\n  - \">= 3.0.2\"\n";
+        let report = Report {
+            insecure_sources: vec![
+                InsecureSource {
+                    source: "http://a/".to_string(),
+                },
+                InsecureSource {
+                    source: "git://b/".to_string(),
+                },
+            ],
+            unpatched_gems: vec![UnpatchedGem {
+                name: "test".to_string(),
+                version: "0.5.0".to_string(),
+                advisory: Advisory::from_yaml(gem_yaml, Path::new("CVE-2020-1111.yml")).unwrap(),
+            }],
+            vulnerable_rubies: vec![VulnerableRuby {
+                engine: "ruby".to_string(),
+                version: "2.6.0".to_string(),
+                advisory: Advisory::from_yaml(ruby_yaml, Path::new("CVE-2021-31810.yml")).unwrap(),
+            }],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        assert_eq!(report.count(), 4);
+    }
 }

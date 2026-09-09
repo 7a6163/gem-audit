@@ -515,4 +515,35 @@ mod tests {
         let err = AdvisoryError::Yaml(yaml_err);
         assert!(err.to_string().contains("YAML parse error"));
     }
+
+    #[test]
+    fn from_yaml_rejects_unparseable_patched_version() {
+        let yaml = "---\ngem: test\ncve: 2020-0001\npatched_versions:\n  - \">= @\"\n";
+        let err = Advisory::from_yaml(yaml, Path::new("test.yml")).unwrap_err();
+        assert!(
+            matches!(&err, AdvisoryError::InvalidRequirement { version_str, .. } if version_str == ">= @"),
+            "unexpected error: {:?}",
+            err
+        );
+        assert!(err.to_string().contains("invalid version"));
+    }
+
+    #[test]
+    fn criticality_cvss_v2_ranges() {
+        let test = |v2: f64, expected: Criticality| {
+            let yaml = format!(
+                "---\ngem: test\ncvss_v2: {}\npatched_versions:\n  - \">= 1.0\"\n",
+                v2
+            );
+            let adv = Advisory::from_yaml(&yaml, Path::new("test.yml")).unwrap();
+            assert_eq!(adv.criticality(), Some(expected), "cvss_v2={}", v2);
+        };
+
+        test(0.0, Criticality::Low);
+        test(3.9, Criticality::Low);
+        test(4.0, Criticality::Medium);
+        test(6.9, Criticality::Medium);
+        test(7.0, Criticality::High);
+        test(10.0, Criticality::High);
+    }
 }

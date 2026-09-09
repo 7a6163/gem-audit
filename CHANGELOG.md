@@ -1,3 +1,58 @@
+### Unreleased
+
+#### Added
+
+* **`GEM_AUDIT_DB_URL`** overrides the git URL the advisory database is cloned
+  from, for mirrors and air-gapped networks. An existing database is still
+  refreshed from its own configured `origin`.
+
+#### Changed
+
+* **`update` now re-clones from the database's own `origin`.** When a git fetch
+  fails, `gem-audit update` falls back to a fresh clone; it previously always
+  re-cloned from the hardcoded upstream URL, discarding a database that had been
+  pointed at a mirror. It now reads the configured remote and only falls back to
+  the upstream URL when none is set.
+* **Unified database messages.** `update`'s download failure now reports
+  `Failed to download advisory database: ...`, matching `check`.
+
+#### Fixed
+
+* **`format_timestamp` no longer garbles pre-1970 timestamps.** Truncating
+  division produced negative hours, minutes and seconds (`00:00:0-1`) for a
+  database whose HEAD commit predates the epoch; it now uses Euclidean division.
+
+#### Internal
+
+* **The test suite no longer touches the network or the real ruby-advisory-db.**
+  Tests that previously skipped themselves when `~/.local/share/ruby-advisory-db`
+  was absent now build a throwaway git-backed advisory database with `gix`, so
+  results are identical on every machine and in CI.
+* **Line coverage raised from 92.38% to 100%** (region coverage 92.89% to
+  98.83%). `codecov.yml` now requires it to stay there.
+* **Added mutation testing (`cargo-mutants`).** A new CI job mutates only the
+  lines a pull request touches (`cargo mutants --in-diff`), so new code has to
+  come with tests that pin behaviour rather than merely execute it.
+  Configuration and the exclusion list live in `.cargo/mutants.toml`.
+* Mutation testing found 50 of 594 viable mutants surviving — tests that ran
+  code without checking its result. All 594 are now killed (one of them only on
+  Linux, where `/dev/full` exists). The gaps were the `--write-ignore` count,
+  JSON compactness on a pipe, `--strict` with advisory load errors, the `stats`
+  per-kind breakdown, `git://` vs `https://` for GIT sources, every blank line
+  and separator in the text report, the CVSS v2 criticality boundaries, and the
+  century/era corrections in the date algorithm.
+* Removed unreachable branches in the version parser, the requirement parser,
+  the lockfile parser and the platform heuristic, and de-duplicated the database
+  open/download/update plumbing in `main.rs`.
+* `--fix` no longer re-reads `Gemfile.lock` after scanning it — the scanner now
+  hands over the text it already read, closing the window in which the file
+  could change between the scan and the patch.
+* All three subcommands now return `Result<(), i32>`; the two filesystem swaps
+  (`write_atomically`, `swap_into_place`) and the write-failure policy
+  (`report_write_result`) are separate, directly tested functions.
+
+---
+
 ### 2.10.0 / 2026-04-02
 
 #### Changed

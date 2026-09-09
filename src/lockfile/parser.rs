@@ -38,23 +38,17 @@ impl SourceState {
     /// Finalize the current source and push it to `sources`.
     fn finalize_source(&mut self, section: &Section, sources: &mut Vec<Source>) {
         if let Some(remote) = self.remote.take() {
-            match section {
-                Section::Gem => {
-                    sources.push(Source::Rubygems(RubygemsSource { remote }));
-                }
-                Section::Git => {
-                    sources.push(Source::Git(GitSource {
-                        remote,
-                        revision: self.revision.take(),
-                        branch: self.branch.take(),
-                        tag: self.tag.take(),
-                    }));
-                }
-                Section::Path => {
-                    sources.push(Source::Path(PathSource { remote }));
-                }
-                _ => {}
-            }
+            sources.push(match section {
+                Section::Git => Source::Git(GitSource {
+                    remote,
+                    revision: self.revision.take(),
+                    branch: self.branch.take(),
+                    tag: self.tag.take(),
+                }),
+                Section::Path => Source::Path(PathSource { remote }),
+                // `remote:` is only ever read inside GEM/GIT/PATH sections.
+                _ => Source::Rubygems(RubygemsSource { remote }),
+            });
         }
         self.revision = None;
         self.branch = None;
@@ -391,24 +385,23 @@ mod tests {
         assert_eq!(lockfile.sources.len(), 2);
 
         // First source: GIT
-        match &lockfile.sources[0] {
-            Source::Git(git) => {
-                assert_eq!(git.remote, "git://github.com/rails/jquery-rails.git");
-                assert_eq!(
-                    git.revision,
-                    Some("a8b003d726522cf663611c114d8f0e79abf8d200".to_string())
-                );
-            }
-            other => panic!("expected Git source, got {:?}", other),
-        }
+        assert_eq!(
+            lockfile.sources[0],
+            Source::Git(GitSource {
+                remote: "git://github.com/rails/jquery-rails.git".to_string(),
+                revision: Some("a8b003d726522cf663611c114d8f0e79abf8d200".to_string()),
+                branch: None,
+                tag: None,
+            })
+        );
 
         // Second source: GEM with http (insecure)
-        match &lockfile.sources[1] {
-            Source::Rubygems(gem) => {
-                assert_eq!(gem.remote, "http://rubygems.org/");
-            }
-            other => panic!("expected Rubygems source, got {:?}", other),
-        }
+        assert_eq!(
+            lockfile.sources[1],
+            Source::Rubygems(RubygemsSource {
+                remote: "http://rubygems.org/".to_string(),
+            })
+        );
     }
 
     #[test]
@@ -621,10 +614,12 @@ DEPENDENCIES
 ";
         let lockfile = parse(input).unwrap();
         assert_eq!(lockfile.sources.len(), 2);
-        match &lockfile.sources[0] {
-            Source::Path(p) => assert_eq!(p.remote, "."),
-            other => panic!("expected Path source, got {:?}", other),
-        }
+        assert_eq!(
+            lockfile.sources[0],
+            Source::Path(PathSource {
+                remote: ".".to_string(),
+            })
+        );
         let my_gem = lockfile.find_spec("my_gem").unwrap();
         assert_eq!(my_gem.version, "0.1.0");
         assert_eq!(my_gem.source_index, 0);
@@ -655,13 +650,15 @@ DEPENDENCIES
   rack
 ";
         let lockfile = parse(input).unwrap();
-        match &lockfile.sources[0] {
-            Source::Git(git) => {
-                assert_eq!(git.tag, Some("v1.0.0".to_string()));
-                assert_eq!(git.revision, Some("abc123".to_string()));
-            }
-            other => panic!("expected Git source, got {:?}", other),
-        }
+        assert_eq!(
+            lockfile.sources[0],
+            Source::Git(GitSource {
+                remote: "https://github.com/foo/bar.git".to_string(),
+                revision: Some("abc123".to_string()),
+                branch: None,
+                tag: Some("v1.0.0".to_string()),
+            })
+        );
     }
 
     // ========== RUBY VERSION section ==========
@@ -695,14 +692,137 @@ BUNDLED WITH
         let input = include_str!("../../tests/fixtures/insecure_sources/Gemfile.lock");
         let lockfile = parse(input).unwrap();
 
-        for spec in &lockfile.specs {
-            assert!(
-                spec.source_index < lockfile.sources.len(),
-                "spec {} has source_index {} but only {} sources",
-                spec.name,
-                spec.source_index,
-                lockfile.sources.len()
-            );
-        }
+        let source_count = lockfile.sources.len();
+        let out_of_range: Vec<_> = lockfile
+            .specs
+            .iter()
+            .filter(|s| s.source_index >= source_count)
+            .map(|s| (s.name.as_str(), s.source_index))
+            .collect();
+        assert!(
+            out_of_range.is_empty(),
+            "specs pointing past the {} sources: {:?}",
+            source_count,
+            out_of_range
+        );
+    }
+
+    // ========== section / indent edge cases ==========
+
+    #[test]
+    fn unknown_section_header_is_ignored() {
+        // Newer Bundler emits sections this parser does not model (e.g. CHECKSUMS).
+        let input = "\
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rack (2.2.0)
+
+CHECKSUMS
+  rack (2.2.0) sha256=deadbeef
+
+DEPENDENCIES
+  rack
+";
+        let lockfile = parse(input).unwrap();
+        assert_eq!(lockfile.specs.len(), 1);
+        assert_eq!(lockfile.dependencies.len(), 1);
+    }
+
+    #[test]
+    fn indented_line_before_any_section_is_ignored() {
+        let input = "\
+  stray line
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rack (2.2.0)
+";
+        let lockfile = parse(input).unwrap();
+        assert_eq!(lockfile.specs.len(), 1);
+        assert_eq!(lockfile.sources.len(), 1);
+    }
+
+    #[test]
+    fn spec_line_before_specs_marker_is_ignored() {
+        let input = "\
+GEM
+  remote: https://rubygems.org/
+    rack (2.2.0)
+  specs:
+    json (2.6.0)
+";
+        let lockfile = parse(input).unwrap();
+        assert_eq!(lockfile.specs.len(), 1);
+        assert_eq!(lockfile.specs[0].name, "json");
+    }
+
+    #[test]
+    fn git_branch_attribute_is_parsed() {
+        let input = "\
+GIT
+  remote: https://github.com/foo/bar.git
+  branch: main
+  revision: abc123
+  specs:
+    bar (1.0.0)
+
+DEPENDENCIES
+  bar!
+";
+        let lockfile = parse(input).unwrap();
+        assert_eq!(
+            lockfile.sources[0],
+            Source::Git(GitSource {
+                remote: "https://github.com/foo/bar.git".to_string(),
+                revision: Some("abc123".to_string()),
+                branch: Some("main".to_string()),
+                tag: None,
+            })
+        );
+    }
+
+    #[test]
+    fn empty_constraints_become_none() {
+        let input = "\
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rack (2.2.0)
+      json ()
+
+DEPENDENCIES
+  rack ()
+";
+        let lockfile = parse(input).unwrap();
+        assert_eq!(lockfile.specs[0].dependencies[0].requirement, None);
+        assert_eq!(lockfile.dependencies[0].requirement, None);
+    }
+
+    #[test]
+    fn source_without_specs_is_not_an_empty_lockfile() {
+        let input = "\
+GEM
+  remote: https://rubygems.org/
+  specs:
+
+PLATFORMS
+  ruby
+";
+        let lockfile = parse(input).unwrap();
+        assert_eq!(lockfile.sources.len(), 1);
+        assert!(lockfile.specs.is_empty());
+    }
+
+    #[test]
+    fn unterminated_constraints_keep_everything_after_the_paren() {
+        let dep = parse_gem_dependency("rack (~> 2.0");
+        assert_eq!(dep.name, "rack");
+        assert_eq!(dep.requirement, Some("~> 2.0".to_string()));
+
+        let dep = parse_dependency_line("rails (~> 5.2");
+        assert_eq!(dep.name, "rails");
+        assert_eq!(dep.requirement, Some("~> 5.2".to_string()));
+        assert!(!dep.pinned);
     }
 }

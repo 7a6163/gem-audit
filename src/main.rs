@@ -133,14 +133,16 @@ fn main() {
     let cli = Cli::parse();
 
     let code = match cli.command {
-        Some(Commands::Check(opts)) => cmd_check(opts),
-        Some(Commands::Update { quiet, database }) => cmd_update(quiet, database.as_deref()),
-        Some(Commands::Stats { database }) => cmd_stats(database.as_deref()),
+        Some(Commands::Check(opts)) => to_code(cmd_check(opts)),
+        Some(Commands::Update { quiet, database }) => {
+            to_code(cmd_update(quiet, database.as_deref()))
+        }
+        Some(Commands::Stats { database }) => to_code(cmd_stats(database.as_deref())),
         Some(Commands::Version) => {
             println!("gem-audit {}", VERSION);
             EXIT_SUCCESS
         }
-        None => cmd_check(CheckOptions::default()),
+        None => to_code(cmd_check(CheckOptions::default())),
     };
 
     if code != EXIT_SUCCESS {
@@ -172,60 +174,107 @@ impl Default for CheckOptions {
     }
 }
 
+/// Collapse a command result into a process exit code.
+fn to_code(result: Result<(), i32>) -> i32 {
+    result.map_or_else(|code| code, |()| EXIT_SUCCESS)
+}
+
 fn resolve_db_path(database: Option<&str>) -> PathBuf {
     database
         .map(PathBuf::from)
         .unwrap_or_else(Database::default_path)
 }
 
-fn ensure_database(db_path: &Path, update: bool, quiet: bool) -> Result<Database, i32> {
-    if !db_path.is_dir() || !db_path.join("gems").is_dir() {
-        if !quiet {
-            eprintln!("Downloading ruby-advisory-db ...");
-        }
-        match Database::download(db_path, quiet) {
-            Ok(_) => {
-                if !quiet {
-                    eprintln!("Downloaded ruby-advisory-db");
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to download advisory database: {}", e);
-                return Err(EXIT_ERROR);
-            }
-        }
-    } else if update {
-        if !quiet {
-            eprintln!("Updating ruby-advisory-db ...");
-        }
-        let db = Database::open(db_path).map_err(|e| {
-            eprintln!("Failed to open advisory database: {}", e);
-            EXIT_ERROR
-        })?;
-        match db.update() {
-            Ok(true) => {
-                if !quiet {
-                    eprintln!("Updated ruby-advisory-db");
-                }
-            }
-            Ok(false) => {
-                if !quiet {
-                    eprintln!("Skipping update, ruby-advisory-db is not a git repository");
-                }
-            }
-            Err(e) => {
-                eprintln!("warning: Failed to update advisory database: {}", e);
-            }
-        }
-    }
+/// Whether the advisory database has already been downloaded to `db_path`.
+fn database_present(db_path: &Path) -> bool {
+    db_path.join("gems").is_dir()
+}
 
+fn open_database(db_path: &Path) -> Result<Database, i32> {
     Database::open(db_path).map_err(|e| {
         eprintln!("Failed to open advisory database: {}", e);
         EXIT_ERROR
     })
 }
 
-fn apply_fixes(lockfile_path: &Path, fix_results: &[FixResult]) {
+fn download_database(db_path: &Path, quiet: bool) -> Result<Database, i32> {
+    if !quiet {
+        eprintln!("Downloading ruby-advisory-db ...");
+    }
+    match Database::download(db_path, quiet) {
+        Ok(db) => {
+            if !quiet {
+                eprintln!("Downloaded ruby-advisory-db");
+            }
+            Ok(db)
+        }
+        Err(e) => {
+            eprintln!("Failed to download advisory database: {}", e);
+            Err(EXIT_ERROR)
+        }
+    }
+}
+
+/// Fetch the latest advisories, reporting progress on stderr.
+///
+/// Returns the failure message when the update did not succeed.
+fn run_update(db: &Database, quiet: bool) -> Result<(), String> {
+    if !quiet {
+        eprintln!("Updating ruby-advisory-db ...");
+    }
+    match db.update() {
+        Ok(true) => {
+            if !quiet {
+                eprintln!("Updated ruby-advisory-db");
+            }
+            Ok(())
+        }
+        Ok(false) => {
+            if !quiet {
+                eprintln!("Skipping update, ruby-advisory-db is not a git repository");
+            }
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn ensure_database(db_path: &Path, update: bool, quiet: bool) -> Result<Database, i32> {
+    if !database_present(db_path) {
+        return download_database(db_path, quiet);
+    }
+
+    let db = open_database(db_path)?;
+    if update && let Err(e) = run_update(&db, quiet) {
+        eprintln!("warning: Failed to update advisory database: {}", e);
+    }
+    Ok(db)
+}
+
+/// Replace `path` with `content`, via a temporary file so a failed write
+/// cannot leave a half-written lockfile behind.
+fn write_atomically(path: &Path, content: &str) -> io::Result<()> {
+    let tmp_path = path.with_extension("lock.tmp");
+    std::fs::write(&tmp_path, content)?;
+    std::fs::rename(&tmp_path, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp_path);
+    })
+}
+
+/// Map a failed report write to an exit code.
+///
+/// A closed pipe (`gem-audit check | head`) is not an error.
+fn report_write_result(result: io::Result<()>) -> Result<(), i32> {
+    match result {
+        Err(e) if e.kind() != io::ErrorKind::BrokenPipe => {
+            eprintln!("error: write failed: {}", e);
+            Err(EXIT_ERROR)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn apply_fixes(lockfile_path: &Path, content: &str, fix_results: &[FixResult]) {
     let fixes: Vec<fixer::FixSuggestion> = fix_results
         .iter()
         .filter_map(|r| match r {
@@ -234,37 +283,20 @@ fn apply_fixes(lockfile_path: &Path, fix_results: &[FixResult]) {
         })
         .collect();
 
-    if fixes.is_empty() {
+    // `patch_lockfile` is a no-op for an empty fix list, so one guard covers
+    // both "nothing to fix" and "nothing matched".
+    let (patched, patched_names) = fixer::patch_lockfile(content, &fixes);
+    if patched_names.is_empty() {
         return;
     }
 
-    match std::fs::read_to_string(lockfile_path) {
-        Ok(content) => {
-            let (patched, patched_names) = fixer::patch_lockfile(&content, &fixes);
-            if !patched_names.is_empty() {
-                let tmp_path = lockfile_path.with_extension("lock.tmp");
-                match std::fs::write(&tmp_path, &patched) {
-                    Ok(()) => {
-                        if let Err(e) = std::fs::rename(&tmp_path, lockfile_path) {
-                            eprintln!("error: failed to write Gemfile.lock: {}", e);
-                            let _ = std::fs::remove_file(&tmp_path);
-                        } else {
-                            eprintln!(
-                                "\nFixed {} gem(s) in {}. Run `bundle install` to install the updated versions.",
-                                patched_names.len(),
-                                lockfile_path.display()
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("error: failed to write temporary file: {}", e);
-                    }
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("error: failed to read {}: {}", lockfile_path.display(), e);
-        }
+    match write_atomically(lockfile_path, &patched) {
+        Ok(()) => eprintln!(
+            "\nFixed {} gem(s) in {}. Run `bundle install` to install the updated versions.",
+            patched_names.len(),
+            lockfile_path.display()
+        ),
+        Err(e) => eprintln!("error: failed to write {}: {}", lockfile_path.display(), e),
     }
 }
 
@@ -272,7 +304,7 @@ fn write_ignore_list(
     report: &gem_audit::scanner::Report,
     config: &Configuration,
     config_path: &Path,
-) -> i32 {
+) -> Result<(), i32> {
     let (new_ids, new_comments) = check::build_ignore_comments(report);
     let merged_ignore: HashSet<String> = config.ignore.union(&new_ids).cloned().collect();
 
@@ -295,20 +327,20 @@ fn write_ignore_list(
                 count,
                 config_path.display()
             );
-            EXIT_SUCCESS
+            Ok(())
         }
         Err(e) => {
             eprintln!("Failed to write config: {}", e);
-            EXIT_ERROR
+            Err(EXIT_ERROR)
         }
     }
 }
 
-fn cmd_check(opts: CheckOptions) -> i32 {
+fn cmd_check(opts: CheckOptions) -> Result<(), i32> {
     let dir = Path::new(&opts.dir);
     if !dir.is_dir() {
         eprintln!("No such file or directory: {}", dir.display());
-        return EXIT_ERROR;
+        return Err(EXIT_ERROR);
     }
 
     let config_path = if Path::new(&opts.config).is_absolute() {
@@ -316,31 +348,22 @@ fn cmd_check(opts: CheckOptions) -> i32 {
     } else {
         dir.join(&opts.config)
     };
-    let config = match Configuration::load_or_default(&config_path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("{}", e);
-            return EXIT_ERROR;
-        }
-    };
+    let config = Configuration::load_or_default(&config_path).map_err(|e| {
+        eprintln!("{}", e);
+        EXIT_ERROR
+    })?;
 
     let db_path = resolve_db_path(opts.database.as_deref());
 
-    let db = match ensure_database(&db_path, opts.update, opts.quiet) {
-        Ok(db) => db,
-        Err(code) => return code,
-    };
+    let db = ensure_database(&db_path, opts.update, opts.quiet)?;
 
     let stale = check::check_staleness(&db, opts.max_db_age, config.max_db_age_days);
 
     let lockfile_path = dir.join(&opts.gemfile_lock);
-    let scanner = match Scanner::new(&lockfile_path, db) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("{}", e);
-            return EXIT_ERROR;
-        }
-    };
+    let scanner = Scanner::new(&lockfile_path, db).map_err(|e| {
+        eprintln!("{}", e);
+        EXIT_ERROR
+    })?;
 
     let ignore_set = if !opts.ignore.is_empty() {
         opts.ignore.iter().cloned().collect::<HashSet<String>>()
@@ -359,24 +382,17 @@ fn cmd_check(opts: CheckOptions) -> i32 {
     // Output
     let stdout = io::stdout();
     let is_tty = stdout.is_terminal();
-    let mut output_handle: Box<dyn Write> = if let Some(ref path) = opts.output {
-        match std::fs::File::create(path) {
-            Ok(f) => Box::new(f),
-            Err(e) => {
-                eprintln!("Failed to open output file {}: {}", path, e);
-                return EXIT_ERROR;
-            }
-        }
-    } else {
-        Box::new(stdout.lock())
+    let mut output_handle: Box<dyn Write> = match opts.output {
+        Some(ref path) => Box::new(std::fs::File::create(path).map_err(|e| {
+            eprintln!("Failed to open output file {}: {}", path, e);
+            EXIT_ERROR
+        })?),
+        None => Box::new(stdout.lock()),
     };
 
-    let fix_results = if opts.fix && !report.unpatched_gems.is_empty() {
-        let remediations = report.remediations();
-        Some(fixer::resolve_fixes(&remediations))
-    } else {
-        None
-    };
+    let fix_results = opts
+        .fix
+        .then(|| fixer::resolve_fixes(&report.remediations()));
 
     let print_result = match opts.format {
         OutputFormat::Text => {
@@ -400,18 +416,17 @@ fn cmd_check(opts: CheckOptions) -> i32 {
         ),
     };
 
-    if let Err(e) = print_result
-        && e.kind() != io::ErrorKind::BrokenPipe
-    {
-        eprintln!("error: write failed: {}", e);
-        return EXIT_ERROR;
-    }
+    report_write_result(print_result)?;
 
     if opts.fix
         && !opts.dry_run
         && let Some(ref results) = fix_results
     {
-        apply_fixes(&lockfile_path, results);
+        apply_fixes(
+            &lockfile_path,
+            scanner.source().unwrap_or_default(),
+            results,
+        );
     }
 
     if opts.write_ignore && report.vulnerable() {
@@ -419,91 +434,44 @@ fn cmd_check(opts: CheckOptions) -> i32 {
     }
 
     if report.vulnerable() {
-        return EXIT_VULNERABLE;
+        return Err(EXIT_VULNERABLE);
     }
 
     if opts.strict && (report.version_parse_errors > 0 || report.advisory_load_errors > 0) {
-        return EXIT_ERROR;
+        return Err(EXIT_ERROR);
     }
 
     if stale && opts.fail_on_stale {
-        return EXIT_STALE;
+        return Err(EXIT_STALE);
     }
 
-    EXIT_SUCCESS
+    Ok(())
 }
 
-fn cmd_update(quiet: bool, database: Option<&str>) -> i32 {
+fn cmd_update(quiet: bool, database: Option<&str>) -> Result<(), i32> {
     let db_path = resolve_db_path(database);
 
-    if !db_path.is_dir() || !db_path.join("gems").is_dir() {
-        if !quiet {
-            eprintln!("Downloading ruby-advisory-db ...");
-        }
-        match Database::download(&db_path, quiet) {
-            Ok(db) => {
-                if !quiet {
-                    eprintln!("Downloaded ruby-advisory-db");
-                    print_stats(&db);
-                }
-                return EXIT_SUCCESS;
-            }
-            Err(e) => {
-                eprintln!("Failed to download: {}", e);
-                return EXIT_ERROR;
-            }
-        }
-    }
-
-    if !quiet {
-        eprintln!("Updating ruby-advisory-db ...");
-    }
-
-    let db = match Database::open(&db_path) {
-        Ok(db) => db,
-        Err(e) => {
-            eprintln!("Failed to open advisory database: {}", e);
-            return EXIT_ERROR;
-        }
-    };
-
-    match db.update() {
-        Ok(true) => {
-            if !quiet {
-                eprintln!("Updated ruby-advisory-db");
-            }
-        }
-        Ok(false) => {
-            if !quiet {
-                eprintln!("Skipping update, ruby-advisory-db is not a git repository");
-            }
-        }
-        Err(e) => {
+    let db = if database_present(&db_path) {
+        let db = open_database(&db_path)?;
+        if let Err(e) = run_update(&db, quiet) {
             eprintln!("Failed to update: {}", e);
-            return EXIT_ERROR;
+            return Err(EXIT_ERROR);
         }
-    }
+        db
+    } else {
+        download_database(&db_path, quiet)?
+    };
 
     if !quiet {
         print_stats(&db);
     }
 
-    EXIT_SUCCESS
+    Ok(())
 }
 
-fn cmd_stats(database: Option<&str>) -> i32 {
-    let db_path = resolve_db_path(database);
-
-    let db = match Database::open(&db_path) {
-        Ok(db) => db,
-        Err(e) => {
-            eprintln!("Failed to open advisory database: {}", e);
-            return EXIT_ERROR;
-        }
-    };
-
-    print_stats(&db);
-    EXIT_SUCCESS
+fn cmd_stats(database: Option<&str>) -> Result<(), i32> {
+    print_stats(&open_database(&resolve_db_path(database))?);
+    Ok(())
 }
 
 fn print_stats(db: &Database) {
@@ -524,5 +492,58 @@ fn print_stats(db: &Database) {
 
     if let Some(commit) = db.commit_id() {
         println!("  commit:\t{}", commit);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_write_result_ignores_a_closed_pipe() {
+        assert_eq!(report_write_result(Ok(())), Ok(()));
+        assert_eq!(
+            report_write_result(Err(io::Error::from(io::ErrorKind::BrokenPipe))),
+            Ok(())
+        );
+        assert_eq!(
+            report_write_result(Err(io::Error::other("disk full"))),
+            Err(EXIT_ERROR)
+        );
+    }
+
+    #[test]
+    fn to_code_maps_results_to_exit_codes() {
+        assert_eq!(to_code(Ok(())), EXIT_SUCCESS);
+        assert_eq!(to_code(Err(EXIT_VULNERABLE)), EXIT_VULNERABLE);
+        assert_eq!(to_code(Err(EXIT_STALE)), EXIT_STALE);
+    }
+
+    #[test]
+    fn write_atomically_replaces_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("Gemfile.lock");
+        std::fs::write(&dest, "old").unwrap();
+
+        write_atomically(&dest, "new").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "new");
+        assert!(!dest.with_extension("lock.tmp").exists());
+    }
+
+    #[test]
+    fn write_atomically_cleans_up_after_a_failed_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        // A non-empty directory cannot be replaced by a rename.
+        let dest = dir.path().join("Gemfile.lock");
+        std::fs::create_dir(&dest).unwrap();
+        std::fs::write(dest.join("occupied"), b"x").unwrap();
+
+        let err = write_atomically(&dest, "new").unwrap_err();
+        assert!(err.kind() != io::ErrorKind::NotFound, "got {:?}", err);
+
+        // The temporary file must not be left behind next to the lockfile.
+        assert!(!dest.with_extension("lock.tmp").exists());
+        assert!(dest.join("occupied").exists());
     }
 }

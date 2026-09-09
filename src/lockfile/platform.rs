@@ -47,8 +47,6 @@ pub fn split_version_platform(input: &str) -> (&str, Option<&str>) {
             || after.starts_with("x64")
             || after.starts_with("arm")
             || after.starts_with("aarch")
-            || after == "java"
-            || after == "jruby"
             || after.starts_with("universal")
             || after.contains("mingw")
             || after.contains("mswin")
@@ -118,5 +116,45 @@ mod tests {
         let (v, p) = split_version_platform("2.0.0-universal-darwin");
         assert_eq!(v, "2.0.0");
         assert_eq!(p, Some("universal-darwin"));
+    }
+
+    // ========== fallback heuristic ==========
+
+    #[test]
+    fn fallback_matches_unknown_platform_suffix() {
+        // Not in PLATFORM_PATTERNS, so the hyphen scan has to recognise it.
+        let (v, p) = split_version_platform("1.0.0-x86_64-freebsd");
+        assert_eq!(v, "1.0.0");
+        assert_eq!(p, Some("x86_64-freebsd"));
+    }
+
+    #[test]
+    fn fallback_skips_non_platform_hyphens() {
+        // The first hyphen fails every heuristic; the second one matches.
+        let (v, p) = split_version_platform("1.0-foo-arm64-haiku");
+        assert_eq!(v, "1.0-foo");
+        assert_eq!(p, Some("arm64-haiku"));
+    }
+
+    #[test]
+    fn fallback_matches_each_heuristic() {
+        let cases = [
+            ("1.0-x64-openbsd", "x64-openbsd"),
+            ("1.0-aarch64-freebsd", "aarch64-freebsd"),
+            ("1.0-universal-haiku", "universal-haiku"),
+            ("1.0-x?-mingw-ucrt", "x?-mingw-ucrt"),
+            ("1.0-x?-mswin64", "x?-mswin64"),
+        ];
+        for (input, platform) in cases {
+            let (_, p) = split_version_platform(input);
+            assert_eq!(p, Some(platform), "input: {}", input);
+        }
+    }
+
+    #[test]
+    fn no_platform_suffix() {
+        let (v, p) = split_version_platform("1.2.3");
+        assert_eq!(v, "1.2.3");
+        assert_eq!(p, None);
     }
 }

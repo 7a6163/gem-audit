@@ -241,12 +241,11 @@ mod tests {
         let result = Configuration::load(&fixtures_dir().join("bad/ignore_is_not_an_array.yml"));
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            ConfigError::InvalidConfiguration(msg) => {
-                assert!(msg.contains("Array"), "expected 'Array' in error: {}", msg);
-            }
-            other => panic!("expected InvalidConfiguration, got: {:?}", other),
-        }
+        assert!(
+            matches!(&err, ConfigError::InvalidConfiguration(msg) if msg.contains("Array")),
+            "unexpected error: {:?}",
+            err
+        );
     }
 
     #[test]
@@ -255,16 +254,11 @@ mod tests {
             Configuration::load(&fixtures_dir().join("bad/ignore_contains_a_non_string.yml"));
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            ConfigError::InvalidConfiguration(msg) => {
-                assert!(
-                    msg.contains("non-String"),
-                    "expected 'non-String' in error: {}",
-                    msg
-                );
-            }
-            other => panic!("expected InvalidConfiguration, got: {:?}", other),
-        }
+        assert!(
+            matches!(&err, ConfigError::InvalidConfiguration(msg) if msg.contains("non-String")),
+            "unexpected error: {:?}",
+            err
+        );
     }
 
     #[test]
@@ -439,24 +433,24 @@ mod tests {
     fn reject_yaml_scalar_root() {
         let result = Configuration::from_yaml("hello");
         assert!(result.is_err());
-        match result.unwrap_err() {
-            ConfigError::InvalidConfiguration(msg) => {
-                assert!(msg.contains("expected a YAML mapping"));
-            }
-            other => panic!("expected InvalidConfiguration, got: {:?}", other),
-        }
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::InvalidConfiguration(msg) if msg.contains("expected a YAML mapping")),
+            "unexpected error: {:?}",
+            err
+        );
     }
 
     #[test]
     fn reject_yaml_sequence_root() {
         let result = Configuration::from_yaml("- item1\n- item2\n");
         assert!(result.is_err());
-        match result.unwrap_err() {
-            ConfigError::InvalidConfiguration(msg) => {
-                assert!(msg.contains("expected a YAML mapping"));
-            }
-            other => panic!("expected InvalidConfiguration, got: {:?}", other),
-        }
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::InvalidConfiguration(msg) if msg.contains("expected a YAML mapping")),
+            "unexpected error: {:?}",
+            err
+        );
     }
 
     // ========== Comment Parsing ==========
@@ -538,6 +532,38 @@ mod tests {
         assert_eq!(
             reloaded.ignore_comments.get("GHSA-aaaa-bbbb-cccc").unwrap(),
             "rack 2.0 (Medium) - Other"
+        );
+    }
+
+    // ========== save ==========
+
+    #[test]
+    fn save_writes_max_db_age_without_ignore_entries() {
+        let path = std::env::temp_dir().join("gem_audit_cfg_max_db_age_only.yml");
+        let _ = std::fs::remove_file(&path);
+
+        let config = Configuration {
+            ignore: HashSet::new(),
+            max_db_age_days: Some(7),
+            ignore_comments: HashMap::new(),
+        };
+        config.save(&path, None).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("max_db_age_days: 7"));
+        assert!(!content.contains("ignore:"));
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn save_reports_write_failure() {
+        let path = Path::new("/gem-audit-no-such-directory/.gem-audit.yml");
+        let err = Configuration::default().save(path, None).unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::InvalidConfiguration(msg) if msg.contains("failed to write")),
+            "unexpected error: {:?}",
+            err
         );
     }
 }

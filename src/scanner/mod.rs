@@ -58,6 +58,8 @@ pub enum ScanError {
 pub struct Scanner {
     lockfile: Lockfile,
     database: Database,
+    /// The raw lockfile text, so callers can patch it without re-reading.
+    source: Option<String>,
 }
 
 impl Scanner {
@@ -69,12 +71,25 @@ impl Scanner {
         let lockfile =
             lockfile::parse(&content).map_err(|e| ScanError::LockfileParse(e.to_string()))?;
 
-        Ok(Scanner { lockfile, database })
+        Ok(Scanner {
+            lockfile,
+            database,
+            source: Some(content),
+        })
     }
 
     /// Create a scanner from an already-parsed lockfile and database.
     pub fn from_lockfile(lockfile: Lockfile, database: Database) -> Self {
-        Scanner { lockfile, database }
+        Scanner {
+            lockfile,
+            database,
+            source: None,
+        }
+    }
+
+    /// The raw lockfile text, when the scanner read it from disk.
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_deref()
     }
 
     /// Run a full scan and produce a report.
@@ -169,7 +184,7 @@ impl Scanner {
         }
 
         // Sort by criticality descending (Critical first, None/Unknown last)
-        results.sort_by(|a, b| b.advisory.criticality().cmp(&a.advisory.criticality()));
+        results.sort_by_key(|r| std::cmp::Reverse(r.advisory.criticality()));
 
         (results, version_parse_errors, advisory_load_errors)
     }
@@ -204,7 +219,7 @@ impl Scanner {
         }
 
         // Sort by criticality descending
-        results.sort_by(|a, b| b.advisory.criticality().cmp(&a.advisory.criticality()));
+        results.sort_by_key(|r| std::cmp::Reverse(r.advisory.criticality()));
 
         (results, load_errors)
     }
@@ -220,26 +235,7 @@ mod tests {
     }
 
     fn mock_database() -> Database {
-        let db_dir = fixtures_dir().join("mock_db");
-        let gem_dir = db_dir.join("gems").join("test");
-        if !gem_dir.exists() {
-            std::fs::create_dir_all(&gem_dir).unwrap();
-            std::fs::copy(
-                fixtures_dir().join("advisory/CVE-2020-1234.yml"),
-                gem_dir.join("CVE-2020-1234.yml"),
-            )
-            .unwrap();
-        }
-        Database::open(&db_dir).unwrap()
-    }
-
-    fn local_database() -> Option<Database> {
-        let path = Database::default_path();
-        if path.join("gems").is_dir() {
-            Database::open(&path).ok()
-        } else {
-            None
-        }
+        Database::open(&fixtures_dir().join("mock_db")).unwrap()
     }
 
     // ========== Source Scanning ==========
@@ -287,70 +283,36 @@ mod tests {
         assert!(vulns.is_empty());
     }
 
-    // ========== Full Scan with Real DB ==========
+    // ========== Full Scan ==========
 
     #[test]
-    fn scan_unpatched_gems_with_real_db() {
-        if let Some(db) = local_database() {
-            let input = include_str!("../../tests/fixtures/unpatched_gems/Gemfile.lock");
-            let lockfile = lockfile::parse(input).unwrap();
-            let scanner = Scanner::from_lockfile(lockfile, db);
+    fn scan_reports_unpatched_gem() {
+        let input = include_str!("../../tests/fixtures/vulnerable_gem/Gemfile.lock");
+        let lockfile = lockfile::parse(input).unwrap();
+        let scanner = Scanner::from_lockfile(lockfile, mock_database());
 
-            let opts = ScanOptions::default();
-            let report = scanner.scan(&opts);
+        let report = scanner.scan(&ScanOptions::default());
 
-            assert!(
-                !report.unpatched_gems.is_empty(),
-                "expected vulnerabilities for unpatched_gems fixture"
-            );
-
-            let has_activerecord = report
-                .unpatched_gems
-                .iter()
-                .any(|v| v.name == "activerecord");
-            assert!(has_activerecord, "expected activerecord vulnerability");
-        }
-    }
-
-    #[test]
-    fn scan_secure_lockfile_with_real_db() {
-        if let Some(db) = local_database() {
-            let input = include_str!("../../tests/fixtures/secure/Gemfile.lock");
-            let lockfile = lockfile::parse(input).unwrap();
-            let scanner = Scanner::from_lockfile(lockfile, db);
-
-            let insecure = scanner.scan_sources();
-            assert!(insecure.is_empty());
-        }
+        assert_eq!(report.unpatched_gems.len(), 1);
+        assert_eq!(report.unpatched_gems[0].name, "test");
+        assert_eq!(report.unpatched_gems[0].version, "0.5.0");
     }
 
     #[test]
     fn scan_with_ignore_list() {
-        if let Some(db) = local_database() {
-            let input = include_str!("../../tests/fixtures/unpatched_gems/Gemfile.lock");
-            let lockfile = lockfile::parse(input).unwrap();
-            let scanner = Scanner::from_lockfile(lockfile, db);
+        let input = include_str!("../../tests/fixtures/vulnerable_gem/Gemfile.lock");
+        let lockfile = lockfile::parse(input).unwrap();
+        let scanner = Scanner::from_lockfile(lockfile, mock_database());
 
-            let all_opts = ScanOptions::default();
-            let (all_vulns, _, _) = scanner.scan_specs(&all_opts);
+        let (all_vulns, _, _) = scanner.scan_specs(&ScanOptions::default());
+        assert_eq!(all_vulns.len(), 1);
 
-            if let Some(first_vuln) = all_vulns.first() {
-                let mut ignore = HashSet::new();
-                for id in first_vuln.advisory.identifiers() {
-                    ignore.insert(id);
-                }
-                let filtered_opts = ScanOptions {
-                    ignore,
-                    ..Default::default()
-                };
-                let (filtered_vulns, _, _) = scanner.scan_specs(&filtered_opts);
-
-                assert!(
-                    filtered_vulns.len() < all_vulns.len(),
-                    "ignore list should reduce vulnerability count"
-                );
-            }
-        }
+        let ignore: HashSet<String> = all_vulns[0].advisory.identifiers().into_iter().collect();
+        let (filtered_vulns, _, _) = scanner.scan_specs(&ScanOptions {
+            ignore,
+            ..Default::default()
+        });
+        assert!(filtered_vulns.is_empty());
     }
 
     // ========== ScanError Display ==========
@@ -425,8 +387,30 @@ DEPENDENCIES
             strict: true,
             ..Default::default()
         };
-        let (_, version_parse_errors, _) = scanner.scan_specs(&opts);
-        assert!(version_parse_errors > 0);
+        let (results, version_parse_errors, advisory_load_errors) = scanner.scan_specs(&opts);
+        assert_eq!(version_parse_errors, 1);
+        assert_eq!(advisory_load_errors, 0);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn scan_sources_accepts_a_secure_git_remote() {
+        let input = "\
+GIT
+  remote: https://github.com/rails/jquery-rails.git
+  revision: abc123
+  specs:
+    jquery-rails (4.4.0)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  jquery-rails!
+";
+        let lockfile = lockfile::parse(input).unwrap();
+        let scanner = Scanner::from_lockfile(lockfile, mock_database());
+        assert!(scanner.scan_sources().is_empty());
     }
 
     // ========== Path source scanning ==========
@@ -599,5 +583,33 @@ RUBY VERSION
         let opts = ScanOptions::default();
         let report = scanner.scan(&opts);
         assert!(report.count() >= 1);
+    }
+
+    #[test]
+    fn scan_sums_gem_and_ruby_advisory_load_errors() {
+        // A database where both the gem and the Ruby advisory fail to parse.
+        let tmp = tempfile::tempdir().unwrap();
+        for (kind, name) in [("gems", "test"), ("rubies", "ruby")] {
+            let dir = tmp.path().join(kind).join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("broken.yml"), "gem: [unclosed\n").unwrap();
+        }
+
+        let input = "\
+GEM
+  remote: https://rubygems.org/
+  specs:
+    test (0.5.0)
+
+RUBY VERSION
+   ruby 2.6.0
+";
+        let lockfile = lockfile::parse(input).unwrap();
+        let scanner = Scanner::from_lockfile(lockfile, Database::open(tmp.path()).unwrap());
+
+        let report = scanner.scan(&ScanOptions::default());
+        assert_eq!(report.advisory_load_errors, 2);
+        assert_eq!(report.version_parse_errors, 0);
+        assert!(!report.vulnerable());
     }
 }

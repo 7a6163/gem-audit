@@ -1,0 +1,12 @@
+# cargo-mutants configuration.
+#
+# CI runs `cargo mutants --in-diff` on every pull request, so each mutant on a
+# line you touch has to be killed by a test.
+
+exclude_re = [
+    # Only reached after successfully cloning from a real remote; `clone_from`,
+    # which does the work, is covered against a local origin instead, and
+    # `GEM_AUDIT_DB_URL` lets the CLI tests exercise the full download path.
+    "Database::download",
+    "delete ! in download_database",
+]
