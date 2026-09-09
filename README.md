@@ -28,6 +28,21 @@ gem install required.
 
 ## Install
 
+### Homebrew
+
+```
+$ brew install 7a6163/tap/gem-audit
+```
+
+Or tap first, then install by name:
+
+```
+$ brew tap 7a6163/tap
+$ brew install gem-audit
+```
+
+The tap ships prebuilt binaries for macOS and Linux, on both arm64 and x86_64.
+
 ### From source
 
 ```
@@ -37,7 +52,7 @@ $ cargo install --path .
 ### Build from source
 
 ```
-$ git clone https://github.com/user/gem-audit.git
+$ git clone https://github.com/7a6163/gem-audit.git
 $ cd gem-audit
 $ cargo build --release
 $ ./target/release/gem-audit --version
