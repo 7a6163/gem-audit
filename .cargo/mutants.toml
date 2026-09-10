@@ -10,3 +10,12 @@ exclude_re = [
     "Database::download",
     "delete ! in download_database",
 ]
+
+# Known survivor that cannot be excluded here, because cargo-mutants does not
+# apply `exclude_re` to struct-field deletions:
+#
+# * `delete field overwrite_existing ... in Database::checkout_head` — gix
+#   opens worktree files with truncate on this path, so the flag only changes
+#   what happens when a worktree entry clashes with an incoming directory (or
+#   the reverse). A real advisory database can reach that state; a test cannot
+#   reasonably construct it.

@@ -22,6 +22,16 @@
   division produced negative hours, minutes and seconds (`00:00:0-1`) for a
   database whose HEAD commit predates the epoch; it now uses Euclidean division.
 
+#### Security
+
+* **Updated transitive dependencies** to clear `cargo audit`: `h2` 0.4.13 →
+  0.4.19 (RUSTSEC-2026-0258, unbounded empty DATA frames), `quinn-proto`
+  0.11.14 → 0.11.17 (RUSTSEC-2026-0185, remote memory exhaustion, 7.5 high),
+  `rustls-webpki` 0.103.10 → 0.103.15 (RUSTSEC-2026-0098/0099, name
+  constraints incorrectly accepted; RUSTSEC-2026-0104, reachable panic in CRL
+  parsing), plus `memmap2` 0.9.11 and `rand` 0.10.2 for the outstanding
+  unsoundness advisories.
+
 #### Internal
 
 * **The test suite no longer touches the network or the real ruby-advisory-db.**

@@ -853,9 +853,13 @@ mod tests {
         commit(&origin_repo, tree, 1_600_000_100, vec![first]);
 
         assert!(db.update().unwrap());
-        assert_eq!(std::fs::read_to_string(&advisory).unwrap(), revised);
         assert_eq!(db.advisories_for("test")[0].patched_versions.len(), 2);
         assert_eq!(db.last_updated_at(), Some(1_600_000_100));
+
+        // The checkout may normalise line endings (git's `core.autocrlf` is on
+        // by default on Windows), so compare the text rather than the bytes.
+        let on_disk = std::fs::read_to_string(&advisory).unwrap();
+        assert_eq!(on_disk.replace("\r\n", "\n"), revised);
     }
 
     #[test]
