@@ -328,4 +328,49 @@ mod tests {
         assert!(results.iter().any(|r| r["type"] == "insecure_source"));
         assert!(results.iter().any(|r| r["type"] == "unpatched_gem"));
     }
+
+    #[test]
+    fn json_output_fix_results() {
+        use crate::fixer::{FixResult, FixSuggestion};
+        use crate::version::Version;
+
+        let yaml = "---\ngem: test\ncve: 2020-1234\ntitle: Test\ncvss_v3: 9.8\npatched_versions:\n  - \">= 1.0.0\"\n";
+        let advisory = Advisory::from_yaml(yaml, Path::new("CVE-2020-1234.yml")).unwrap();
+        let report = Report {
+            insecure_sources: vec![],
+            unpatched_gems: vec![UnpatchedGem {
+                name: "test".to_string(),
+                version: "0.5.0".to_string(),
+                advisory,
+            }],
+            vulnerable_rubies: vec![],
+            version_parse_errors: 0,
+            advisory_load_errors: 0,
+        };
+        let results = [
+            FixResult::Fixed(FixSuggestion {
+                name: "test".to_string(),
+                current_version: "0.5.0".to_string(),
+                resolved_version: Version::parse("1.0.0").unwrap(),
+                advisory_ids: vec!["CVE-2020-1234".to_string()],
+            }),
+            FixResult::Unresolvable {
+                name: "other".to_string(),
+                current_version: "0.1.0".to_string(),
+                advisory_ids: vec!["CVE-2020-9999".to_string()],
+            },
+        ];
+
+        let mut buf = Vec::new();
+        print_json(&report, &mut buf, false, true, Some(&results)).unwrap();
+        let parsed: Value = serde_json::from_str(&String::from_utf8(buf).unwrap()).unwrap();
+        let remediations = parsed["remediations"].as_array().unwrap();
+
+        assert_eq!(remediations[0]["gem"], "test");
+        assert_eq!(remediations[0]["resolved_version"], "1.0.0");
+        assert_eq!(remediations[0]["status"], "fixed");
+        assert_eq!(remediations[1]["gem"], "other");
+        assert!(remediations[1]["resolved_version"].is_null());
+        assert_eq!(remediations[1]["status"], "unresolvable");
+    }
 }

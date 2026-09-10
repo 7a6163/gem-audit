@@ -248,4 +248,18 @@ mod tests {
             32
         ));
     }
+
+    #[test]
+    fn source_without_host_is_not_internal() {
+        // No `://`, so no host can be extracted.
+        assert!(!is_internal_source("rubygems.org"));
+        // Scheme present but the authority is empty.
+        assert!(!is_internal_source("http:///path"));
+    }
+
+    #[test]
+    fn unresolvable_host_is_not_internal() {
+        // Spaces are not valid in a hostname, so resolution fails outright.
+        assert!(!is_internal_source("http://not a host/"));
+    }
 }

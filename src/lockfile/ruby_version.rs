@@ -133,4 +133,12 @@ mod tests {
         // "pre" contains 'p' but it's not a patchlevel
         assert_eq!(strip_patchlevel("1.0.0.pre1"), "1.0.0.pre1");
     }
+
+    #[test]
+    fn strip_patchlevel_requires_digits_after_p() {
+        // Trailing 'p' with nothing after it is not a patchlevel.
+        assert_eq!(strip_patchlevel("3.1p"), "3.1p");
+        // Neither is a suffix that merely starts with 'p'.
+        assert_eq!(strip_patchlevel("2.6.0pre"), "2.6.0pre");
+    }
 }

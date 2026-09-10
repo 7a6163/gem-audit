@@ -28,6 +28,21 @@ gem install required.
 
 ## Install
 
+### Homebrew
+
+```
+$ brew install 7a6163/tap/gem-audit
+```
+
+Or tap first, then install by name:
+
+```
+$ brew tap 7a6163/tap
+$ brew install gem-audit
+```
+
+The tap ships prebuilt binaries for macOS and Linux, on both arm64 and x86_64.
+
 ### From source
 
 ```
@@ -37,7 +52,7 @@ $ cargo install --path .
 ### Build from source
 
 ```
-$ git clone https://github.com/user/gem-audit.git
+$ git clone https://github.com/7a6163/gem-audit.git
 $ cd gem-audit
 $ cargo build --release
 $ ./target/release/gem-audit --version
@@ -221,6 +236,17 @@ Running `gem-audit` with no subcommand is equivalent to `gem-audit check`.
 | `--strict`                  | Treat parse/load warnings as errors (exit code 2) |
 | `--fix`                     | Show remediation suggestions for vulnerable gems   |
 | `--write-ignore`            | Write all detected advisory IDs to the config ignore list |
+
+## Environment Variables
+
+| Variable            | Description                                                          |
+|---------------------|----------------------------------------------------------------------|
+| `GEM_AUDIT_DB`      | Advisory database path (default: `~/.local/share/ruby-advisory-db`)   |
+| `GEM_AUDIT_DB_URL`  | Git URL to clone the advisory database from, for mirrors and air-gapped networks (default: the upstream `rubysec/ruby-advisory-db`) |
+
+`--database` overrides `GEM_AUDIT_DB`. `GEM_AUDIT_DB_URL` is used when the
+database does not exist yet and has to be downloaded; an existing database is
+always refreshed from its own configured `origin`.
 
 ## Exit Codes
 

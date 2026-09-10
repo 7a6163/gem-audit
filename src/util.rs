@@ -1,7 +1,9 @@
 /// Format a Unix timestamp as a human-readable UTC date string.
 pub fn format_timestamp(seconds: i64) -> String {
-    let days_since_epoch = seconds / 86400;
-    let time_of_day = seconds % 86400;
+    // Euclidean division so timestamps before 1970 borrow into the previous day
+    // instead of producing a negative time of day.
+    let days_since_epoch = seconds.div_euclid(86400);
+    let time_of_day = seconds.rem_euclid(86400);
     let hours = time_of_day / 3600;
     let minutes = (time_of_day % 3600) / 60;
     let secs = time_of_day % 60;
@@ -85,5 +87,47 @@ mod tests {
     fn days_to_date_year_2024() {
         // 2024-01-01 is day 19723
         assert_eq!(days_to_date(19723), (2024, 1, 1));
+    }
+
+    #[test]
+    fn format_timestamp_before_the_epoch() {
+        assert_eq!(format_timestamp(-1), "1969-12-31 23:59:59 UTC");
+        assert_eq!(format_timestamp(-86400), "1969-12-31 00:00:00 UTC");
+    }
+
+    // The civil-from-days algorithm branches on 400-year eras; these cases
+    // reach the parts of it that dates near 1970 never touch.
+
+    #[test]
+    fn days_to_date_across_leap_cycles() {
+        // Day-of-era 1460 and 120257: the leap-day corrections in `yoe` have to
+        // be summed, not folded together.
+        assert_eq!(days_to_date(12477), (2004, 2, 29));
+        assert_eq!(days_to_date(131274), (2329, 6, 2));
+    }
+
+    #[test]
+    fn days_to_date_more_than_a_century_into_an_era() {
+        // day-of-era 54892, so the `doe / 36524` century correction applies
+        assert_eq!(days_to_date(65909), (2150, 6, 15));
+        // The first day of era-day 36524 and 109572, where that correction
+        // first changes the year-of-era.
+        assert_eq!(days_to_date(47541), (2100, 3, 1));
+        assert_eq!(days_to_date(120589), (2300, 3, 1));
+    }
+
+    #[test]
+    fn days_to_date_at_the_era_boundary() {
+        // z == 0: the first day of era 0
+        assert_eq!(days_to_date(-719468), (0, 3, 1));
+        // z == -1: the negative-era branch, and day-of-era 146096, the only
+        // value for which the `doe / 146096` correction is non-zero
+        assert_eq!(days_to_date(-719469), (0, 2, 29));
+    }
+
+    #[test]
+    fn days_to_date_far_before_the_epoch() {
+        assert_eq!(days_to_date(-800000), (-221, 9, 4));
+        assert_eq!(days_to_date(-719162), (1, 1, 1));
     }
 }

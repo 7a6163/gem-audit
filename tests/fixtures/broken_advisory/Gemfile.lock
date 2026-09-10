@@ -1,13 +1,10 @@
 GEM
   remote: https://rubygems.org/
   specs:
-    test (0.5.0)
+    broken (1.0.0)
 
 PLATFORMS
   ruby
 
 DEPENDENCIES
-  test
-
-BUNDLED WITH
-   2.3.6
+  broken

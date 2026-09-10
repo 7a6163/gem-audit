@@ -8,6 +8,14 @@ use crate::version::Version;
 /// Git URL of the ruby-advisory-db.
 const ADVISORY_DB_URL: &str = "https://github.com/rubysec/ruby-advisory-db.git";
 
+/// The URL to clone the advisory database from.
+///
+/// Overridable with `GEM_AUDIT_DB_URL` so that mirrors and air-gapped setups
+/// can point at an internal copy of the ruby-advisory-db.
+fn advisory_db_url() -> String {
+    std::env::var("GEM_AUDIT_DB_URL").unwrap_or_else(|_| ADVISORY_DB_URL.to_string())
+}
+
 /// The ruby-advisory-db database.
 #[derive(Debug)]
 pub struct Database {
@@ -51,12 +59,16 @@ impl Database {
 
     /// Download the ruby-advisory-db to the given path.
     pub fn download(path: &Path, _quiet: bool) -> Result<Self, DatabaseError> {
-        // Ensure the parent directory exists; gix does not create it automatically.
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(DatabaseError::Io)?;
-        }
+        Self::clone_from(&advisory_db_url(), path)
+    }
 
-        let (mut checkout, _outcome) = gix::prepare_clone(ADVISORY_DB_URL, path)
+    /// Clone `url` into `path`, creating the parent directory if needed.
+    fn clone_from(url: &str, path: &Path) -> Result<Self, DatabaseError> {
+        // gix does not create the destination's parent directory. `parent()` is
+        // only `None` for a filesystem root, which always exists already.
+        std::fs::create_dir_all(path.parent().unwrap_or(path)).map_err(DatabaseError::Io)?;
+
+        let (mut checkout, _outcome) = gix::prepare_clone(url, path)
             .map_err(|e| DatabaseError::DownloadFailed(e.to_string()))?
             .fetch_then_checkout(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
             .map_err(|e| DatabaseError::DownloadFailed(e.to_string()))?;
@@ -68,6 +80,23 @@ impl Database {
         Ok(Database {
             path: path.to_path_buf(),
         })
+    }
+
+    /// The URL this database was cloned from.
+    ///
+    /// Falls back to the canonical upstream when no remote is configured.
+    fn remote_url(&self) -> String {
+        gix::open(&self.path)
+            .ok()
+            .and_then(|repo| {
+                let remote = repo
+                    .find_default_remote(gix::remote::Direction::Fetch)?
+                    .ok()?;
+                remote
+                    .url(gix::remote::Direction::Fetch)
+                    .map(|url| url.to_bstring().to_string())
+            })
+            .unwrap_or_else(advisory_db_url)
     }
 
     /// Update the database by fetching from origin and fast-forwarding.
@@ -217,13 +246,8 @@ impl Database {
         let _ = std::fs::remove_dir_all(&old);
 
         // Clone into tmp, then atomically swap with the live DB.
-        Database::download(&tmp, true)?;
-        std::fs::rename(&self.path, &old).map_err(DatabaseError::Io)?;
-        std::fs::rename(&tmp, &self.path).map_err(|e| {
-            // Best-effort rollback: restore the old DB before returning the error.
-            let _ = std::fs::rename(&old, &self.path);
-            DatabaseError::Io(e)
-        })?;
+        Database::clone_from(&self.remote_url(), &tmp)?;
+        swap_into_place(&tmp, &self.path, &old)?;
 
         // Remove old DB (best-effort, failure is non-fatal).
         let _ = std::fs::remove_dir_all(&old);
@@ -422,6 +446,18 @@ impl fmt::Display for Database {
     }
 }
 
+/// Move `staged` onto `path`, parking whatever is currently at `path` in `backup`.
+///
+/// If the second move fails, the backup is put back so `path` is never left
+/// missing.
+fn swap_into_place(staged: &Path, path: &Path, backup: &Path) -> Result<(), DatabaseError> {
+    std::fs::rename(path, backup).map_err(DatabaseError::Io)?;
+    std::fs::rename(staged, path).map_err(|e| {
+        let _ = std::fs::rename(backup, path);
+        DatabaseError::Io(e)
+    })
+}
+
 /// Check that `child` is logically contained within `parent` after normalising
 /// `..` components.  This prevents path traversal via crafted gem/engine names.
 fn is_contained_in(child: &Path, parent: &Path) -> bool {
@@ -458,84 +494,6 @@ fn dirs_fallback() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ========== Database with real ruby-advisory-db ==========
-
-    fn local_db() -> Option<Database> {
-        let path = Database::default_path();
-        if path.is_dir() && path.join("gems").is_dir() {
-            Database::open(&path).ok()
-        } else {
-            None
-        }
-    }
-
-    #[test]
-    fn open_local_database() {
-        if let Some(db) = local_db() {
-            assert!(db.exists());
-            assert!(db.is_git());
-        }
-    }
-
-    #[test]
-    fn database_size() {
-        if let Some(db) = local_db() {
-            let size = db.size();
-            // ruby-advisory-db has hundreds of advisories
-            assert!(size > 100, "expected > 100 advisories, got {}", size);
-        }
-    }
-
-    #[test]
-    fn database_commit_id() {
-        if let Some(db) = local_db() {
-            let commit = db.commit_id();
-            assert!(commit.is_some());
-            let id = commit.unwrap();
-            assert_eq!(id.len(), 40); // SHA-1 hex
-        }
-    }
-
-    #[test]
-    fn database_last_updated() {
-        if let Some(db) = local_db() {
-            let ts = db.last_updated_at();
-            assert!(ts.is_some());
-            assert!(ts.unwrap() > 0);
-        }
-    }
-
-    #[test]
-    fn advisories_for_actionpack() {
-        if let Some(db) = local_db() {
-            let advisories = db.advisories_for("actionpack");
-            // actionpack has many known CVEs
-            assert!(!advisories.is_empty(), "expected advisories for actionpack");
-        }
-    }
-
-    #[test]
-    fn check_vulnerable_gem() {
-        if let Some(db) = local_db() {
-            // Rails 3.2.10 is known to have vulnerabilities
-            let version = Version::parse("3.2.10").unwrap();
-            let (vulnerabilities, _errors) = db.check_gem("activerecord", &version);
-            assert!(
-                !vulnerabilities.is_empty(),
-                "expected activerecord 3.2.10 to have vulnerabilities"
-            );
-        }
-    }
-
-    #[test]
-    fn check_nonexistent_gem() {
-        if let Some(db) = local_db() {
-            let version = Version::parse("1.0.0").unwrap();
-            let (vulnerabilities, _errors) = db.check_gem("nonexistent-gem-xyz", &version);
-            assert!(vulnerabilities.is_empty());
-        }
-    }
 
     // ========== Database with fixture advisory ==========
 
@@ -723,6 +681,11 @@ mod tests {
     fn is_contained_in_normal_path() {
         let parent = Path::new("/db");
         assert!(is_contained_in(&parent.join("gems").join("rails"), parent));
+        // `..` is fine as long as it does not escape the directory.
+        assert!(is_contained_in(
+            &parent.join("gems").join("rails").join("..").join("rack"),
+            parent
+        ));
     }
 
     #[test]
@@ -750,5 +713,348 @@ mod tests {
         let (advisories, errors) = db.advisories_for_ruby_with_errors("../../etc");
         assert!(advisories.is_empty());
         assert_eq!(errors, 0);
+    }
+
+    // ========== Git-backed database (local origin, no network) ==========
+
+    const ADVISORY_YAML: &str =
+        "---\ngem: test\ncve: 2020-1234\npatched_versions:\n  - \">= 1.0.0\"\n";
+
+    fn write_tree(
+        repo: &gix::Repository,
+        entries: &[(&str, gix::ObjectId, gix::objs::tree::EntryKind)],
+    ) -> gix::ObjectId {
+        let mut tree = gix::objs::Tree::empty();
+        for (name, oid, kind) in entries {
+            tree.entries.push(gix::objs::tree::Entry {
+                mode: (*kind).into(),
+                filename: (*name).into(),
+                oid: *oid,
+            });
+        }
+        tree.entries.sort();
+        repo.write_object(&tree).unwrap().detach()
+    }
+
+    /// Build the root tree for a database holding `gems/<gem>/<file>`.
+    fn advisory_tree(
+        repo: &gix::Repository,
+        gem: &str,
+        file: &str,
+        content: &str,
+    ) -> gix::ObjectId {
+        let blob = repo.write_blob(content.as_bytes()).unwrap().detach();
+        let gem_tree = write_tree(repo, &[(file, blob, gix::objs::tree::EntryKind::Blob)]);
+        let gems_tree = write_tree(repo, &[(gem, gem_tree, gix::objs::tree::EntryKind::Tree)]);
+        write_tree(
+            repo,
+            &[("gems", gems_tree, gix::objs::tree::EntryKind::Tree)],
+        )
+    }
+
+    fn commit(
+        repo: &gix::Repository,
+        tree: gix::ObjectId,
+        seconds: i64,
+        parents: Vec<gix::ObjectId>,
+    ) -> gix::ObjectId {
+        let time = format!("{} +0000", seconds);
+        let sig = gix::actor::SignatureRef {
+            name: "gem-audit tests".into(),
+            email: "tests@example.com".into(),
+            time: time.as_str(),
+        };
+        repo.commit_as(sig, sig, "HEAD", "advisories", tree, parents)
+            .unwrap()
+            .detach()
+    }
+
+    /// Create a git repository at `path` holding a single `test` gem advisory.
+    fn init_origin(path: &Path, seconds: i64) -> gix::ObjectId {
+        std::fs::create_dir_all(path.join("gems").join("test")).unwrap();
+        std::fs::write(
+            path.join("gems").join("test").join("CVE-2020-1234.yml"),
+            ADVISORY_YAML,
+        )
+        .unwrap();
+
+        let repo = gix::init(path).unwrap();
+        let tree = advisory_tree(&repo, "test", "CVE-2020-1234.yml", ADVISORY_YAML);
+        commit(&repo, tree, seconds, Vec::new())
+    }
+
+    #[test]
+    fn git_database_exposes_commit_and_timestamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("db");
+        init_origin(&path, 1_600_000_000);
+
+        let db = Database::open(&path).unwrap();
+        assert!(db.is_git());
+        assert_eq!(db.commit_id().unwrap().len(), 40);
+        assert_eq!(db.last_updated_at(), Some(1_600_000_000));
+        assert_eq!(db.size(), 1);
+    }
+
+    #[test]
+    fn clone_from_local_origin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = tmp.path().join("origin");
+        init_origin(&origin, 1_600_000_000);
+
+        let dest = tmp.path().join("nested").join("clone");
+        let db = Database::clone_from(origin.to_str().unwrap(), &dest).unwrap();
+
+        assert!(db.exists());
+        assert_eq!(db.advisories_for("test").len(), 1);
+        // The recorded remote may be canonicalised, so compare the tail only.
+        assert!(db.remote_url().ends_with("origin"), "{}", db.remote_url());
+    }
+
+    #[test]
+    fn clone_from_reports_unusable_destination() {
+        // The parent path is a regular file, so creating it fails.
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("not-a-directory");
+        std::fs::write(&file, b"x").unwrap();
+
+        let err = Database::clone_from("ignored", &file.join("nested").join("db")).unwrap_err();
+        assert!(matches!(err, DatabaseError::Io(_)), "got {:?}", err);
+    }
+
+    #[test]
+    fn remote_url_falls_back_to_the_configured_upstream() {
+        let (tmp, _) = temp_mock_db();
+        let db = Database::open(tmp.path()).unwrap();
+        // No `GEM_AUDIT_DB_URL` is set in the test environment.
+        assert_eq!(db.remote_url(), ADVISORY_DB_URL);
+        assert_eq!(advisory_db_url(), ADVISORY_DB_URL);
+    }
+
+    #[test]
+    fn update_fast_forwards_from_origin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = tmp.path().join("origin");
+        let first = init_origin(&origin, 1_600_000_000);
+
+        let clone_path = tmp.path().join("clone");
+        let db = Database::clone_from(origin.to_str().unwrap(), &clone_path).unwrap();
+        let advisory = clone_path
+            .join("gems")
+            .join("test")
+            .join("CVE-2020-1234.yml");
+        assert_eq!(db.advisories_for("test")[0].patched_versions.len(), 1);
+
+        // Upstream widens the advisory and drops the old gem directory, so the
+        // update has to both add a file and overwrite an existing one.
+        let revised = "---\ngem: other\ncve: 2020-5678\npatched_versions:\n  - \">= 1.0.0\"\n  - \"~> 0.9.1\"\n";
+        let origin_repo = gix::open(&origin).unwrap();
+        let tree = advisory_tree(&origin_repo, "test", "CVE-2020-1234.yml", revised);
+        commit(&origin_repo, tree, 1_600_000_100, vec![first]);
+
+        assert!(db.update().unwrap());
+        assert_eq!(db.advisories_for("test")[0].patched_versions.len(), 2);
+        assert_eq!(db.last_updated_at(), Some(1_600_000_100));
+
+        // The checkout may normalise line endings (git's `core.autocrlf` is on
+        // by default on Windows), so compare the text rather than the bytes.
+        let on_disk = std::fs::read_to_string(&advisory).unwrap();
+        assert_eq!(on_disk.replace("\r\n", "\n"), revised);
+    }
+
+    #[test]
+    fn update_is_skipped_for_non_git_database() {
+        let (tmp, _) = temp_mock_db();
+        let db = Database::open(tmp.path()).unwrap();
+        assert!(!db.update().unwrap());
+    }
+
+    #[test]
+    fn update_reclones_when_fetch_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = tmp.path().join("origin");
+        init_origin(&origin, 1_600_000_000);
+
+        let clone_path = tmp.path().join("clone");
+        let db = Database::clone_from(origin.to_str().unwrap(), &clone_path).unwrap();
+
+        // Break the fetch by removing the ref the clone tracks, then let the
+        // reclone fall back to the (still valid) local origin.
+        std::fs::remove_dir_all(clone_path.join(".git").join("refs").join("remotes")).unwrap();
+        assert!(db.reclone().unwrap());
+        assert_eq!(db.advisories_for("test").len(), 1);
+    }
+
+    #[test]
+    fn update_fails_when_origin_is_gone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = tmp.path().join("origin");
+        init_origin(&origin, 1_600_000_000);
+
+        let clone_path = tmp.path().join("clone");
+        let db = Database::clone_from(origin.to_str().unwrap(), &clone_path).unwrap();
+        std::fs::remove_dir_all(&origin).unwrap();
+
+        let err = db.update().unwrap_err();
+        assert!(
+            matches!(err, DatabaseError::DownloadFailed(_)),
+            "got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn checkout_head_needs_a_remote_tracking_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("db");
+        init_origin(&path, 1_600_000_000);
+
+        let db = Database::open(&path).unwrap();
+        let err = db.checkout_head().unwrap_err();
+        assert!(
+            err.to_string().contains("no remote tracking branch"),
+            "got {}",
+            err
+        );
+    }
+
+    #[test]
+    fn advisories_is_empty_without_a_gems_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::open(tmp.path()).unwrap();
+        assert!(db.advisories().is_empty());
+        assert_eq!(db.size(), 0);
+        assert_eq!(db.rubies_size(), 0);
+        assert!(!db.exists());
+    }
+
+    #[test]
+    fn malformed_advisory_files_are_counted_as_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let gem_dir = tmp.path().join("gems").join("test");
+        std::fs::create_dir_all(&gem_dir).unwrap();
+        std::fs::write(gem_dir.join("broken.yml"), "gem: [unclosed\n").unwrap();
+        // Non-YAML files in the directory are ignored entirely.
+        std::fs::write(gem_dir.join("README.md"), "not an advisory").unwrap();
+
+        let db = Database::open(tmp.path()).unwrap();
+        let (advisories, errors) = db.check_gem("test", &Version::parse("1.0.0").unwrap());
+        assert!(advisories.is_empty());
+        assert_eq!(errors, 1);
+        assert!(db.advisories().is_empty());
+    }
+
+    #[test]
+    fn is_contained_in_ignores_non_normal_components() {
+        // Leading `/` and `.` components must not affect the depth counter.
+        assert!(is_contained_in(
+            Path::new("/db/./gems/rails"),
+            Path::new("/db")
+        ));
+    }
+
+    #[test]
+    fn stray_files_beside_gem_directories_are_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let gems = tmp.path().join("gems");
+        std::fs::create_dir_all(gems.join("test")).unwrap();
+        std::fs::write(gems.join("test").join("CVE-2020-1234.yml"), ADVISORY_YAML).unwrap();
+        // A loose file directly under gems/ is not a gem directory.
+        std::fs::write(gems.join("index.json"), "{}").unwrap();
+
+        let db = Database::open(tmp.path()).unwrap();
+        assert_eq!(db.advisories().len(), 1);
+        assert_eq!(db.size(), 1);
+    }
+
+    #[test]
+    fn is_contained_in_handles_paths_outside_the_parent() {
+        // `strip_prefix` fails, so the root component is walked as-is.
+        assert!(is_contained_in(Path::new("/elsewhere/x"), Path::new("/db")));
+        assert!(!is_contained_in(Path::new("../escape"), Path::new("/db")));
+    }
+
+    /// Directories that cannot be listed are skipped, not fatal.
+    ///
+    /// Unix only: permission bits do not restrict a process running as root,
+    /// and Windows has no equivalent of a directory with no read bit.
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_directories_are_skipped() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let unreadable = std::fs::Permissions::from_mode(0o000);
+        let readable = std::fs::Permissions::from_mode(0o755);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let gems = tmp.path().join("gems");
+        let gem_dir = gems.join("test");
+        std::fs::create_dir_all(&gem_dir).unwrap();
+        std::fs::write(gem_dir.join("CVE-2020-1234.yml"), ADVISORY_YAML).unwrap();
+        let db = Database::open(tmp.path()).unwrap();
+
+        // The gem's own directory cannot be listed.
+        std::fs::set_permissions(&gem_dir, unreadable.clone()).unwrap();
+        let listed_anyway = std::fs::read_dir(&gem_dir).is_ok();
+        let advisories = db.advisories();
+        let size = db.size();
+        std::fs::set_permissions(&gem_dir, readable.clone()).unwrap();
+
+        // A process running as root is not restricted by the permission bits,
+        // in which case there is nothing to assert.
+        assert!(listed_anyway || advisories.is_empty());
+        assert!(listed_anyway || size == 0);
+
+        // The `gems` directory itself cannot be listed.
+        std::fs::set_permissions(&gems, unreadable).unwrap();
+        let listed_anyway = std::fs::read_dir(&gems).is_ok();
+        let advisories = db.advisories();
+        let size = db.size();
+        std::fs::set_permissions(&gems, readable).unwrap();
+
+        assert!(listed_anyway || advisories.is_empty());
+        assert!(listed_anyway || size == 0);
+    }
+
+    #[test]
+    fn swap_into_place_restores_the_backup_when_the_move_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let live = tmp.path().join("db");
+        let backup = tmp.path().join("db_old");
+        let staged = tmp.path().join("db_tmp"); // deliberately never created
+
+        std::fs::create_dir(&live).unwrap();
+        std::fs::write(live.join("marker"), b"live").unwrap();
+
+        let err = swap_into_place(&staged, &live, &backup).unwrap_err();
+        assert!(matches!(err, DatabaseError::Io(_)), "got {:?}", err);
+
+        // The live database is back where it was, and the backup is gone.
+        assert_eq!(
+            std::fs::read_to_string(live.join("marker")).unwrap(),
+            "live"
+        );
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn swap_into_place_swaps_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let live = tmp.path().join("db");
+        let backup = tmp.path().join("db_old");
+        let staged = tmp.path().join("db_tmp");
+
+        std::fs::create_dir(&live).unwrap();
+        std::fs::write(live.join("marker"), b"old").unwrap();
+        std::fs::create_dir(&staged).unwrap();
+        std::fs::write(staged.join("marker"), b"new").unwrap();
+
+        swap_into_place(&staged, &live, &backup).unwrap();
+
+        assert_eq!(std::fs::read_to_string(live.join("marker")).unwrap(), "new");
+        assert_eq!(
+            std::fs::read_to_string(backup.join("marker")).unwrap(),
+            "old"
+        );
     }
 }

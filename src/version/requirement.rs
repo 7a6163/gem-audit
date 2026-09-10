@@ -135,10 +135,6 @@ impl Requirement {
             constraints.push(constraint);
         }
 
-        if constraints.is_empty() {
-            return Err(RequirementError::Empty);
-        }
-
         Ok(Requirement { constraints })
     }
 
@@ -556,5 +552,90 @@ mod tests {
     fn display_compound() {
         let req = Requirement::parse(">= 1.0, < 2.0").unwrap();
         assert_eq!(req.to_string(), ">= 1.0, < 2.0");
+    }
+
+    // ========== Operator Display ==========
+
+    #[test]
+    fn operator_display_all_variants() {
+        assert_eq!(Operator::Equal.to_string(), "=");
+        assert_eq!(Operator::NotEqual.to_string(), "!=");
+        assert_eq!(Operator::GreaterThan.to_string(), ">");
+        assert_eq!(Operator::LessThan.to_string(), "<");
+        assert_eq!(Operator::GreaterThanOrEqual.to_string(), ">=");
+        assert_eq!(Operator::LessThanOrEqual.to_string(), "<=");
+        assert_eq!(Operator::Pessimistic.to_string(), "~>");
+    }
+
+    // ========== VersionConstraint::minimum_version ==========
+
+    #[test]
+    fn constraint_minimum_version_upper_bounds_are_none() {
+        for input in ["< 2.0", "<= 2.0", "!= 2.0"] {
+            let req = Requirement::parse(input).unwrap();
+            assert!(
+                req.constraints[0].minimum_version().is_none(),
+                "{} should have no lower bound",
+                input
+            );
+        }
+    }
+
+    // ========== Requirement::parse edge cases ==========
+
+    #[test]
+    fn parse_empty_string_is_default() {
+        assert_eq!(Requirement::parse("").unwrap(), Requirement::default());
+        assert_eq!(Requirement::parse("   ").unwrap(), Requirement::default());
+    }
+
+    #[test]
+    fn parse_empty_part_is_error() {
+        assert_eq!(
+            Requirement::parse(",").unwrap_err(),
+            RequirementError::Empty
+        );
+        assert_eq!(
+            RequirementError::Empty.to_string(),
+            "empty requirement string"
+        );
+    }
+
+    #[test]
+    fn parse_multiple_with_no_inputs_is_default() {
+        assert_eq!(
+            Requirement::parse_multiple(&[]).unwrap(),
+            Requirement::default()
+        );
+    }
+
+    // ========== Requirement::minimum_version ==========
+
+    #[test]
+    fn minimum_version_keeps_the_highest_lower_bound() {
+        // The second constraint is lower, so the running candidate is kept ...
+        let req = Requirement::parse(">= 2.0, >= 1.0").unwrap();
+        assert_eq!(req.minimum_version().unwrap().to_string(), "2.0");
+
+        // ... and higher, so it replaces the running candidate.
+        let req = Requirement::parse(">= 1.0, >= 2.0").unwrap();
+        assert_eq!(req.minimum_version().unwrap().to_string(), "2.0");
+
+        // Equal bounds keep the first spelling rather than the later one.
+        let req = Requirement::parse(">= 1.0, >= 1.0.0").unwrap();
+        assert_eq!(req.minimum_version().unwrap().to_string(), "1.0");
+    }
+
+    #[test]
+    fn minimum_version_steps_past_an_exclusion() {
+        let req = Requirement::parse(">= 1.0, != 1.0").unwrap();
+        assert_eq!(req.minimum_version().unwrap().to_string(), "1.1");
+    }
+
+    #[test]
+    fn minimum_version_gives_up_on_unsatisfiable_requirement() {
+        // No version is both >= 1.0 and < 1.0, so the search exhausts its budget.
+        let req = Requirement::parse(">= 1.0, < 1.0").unwrap();
+        assert!(req.minimum_version().is_none());
     }
 }

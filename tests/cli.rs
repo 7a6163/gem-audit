@@ -1,6 +1,6 @@
 #![allow(deprecated)] // Command::cargo_bin — replacement macro is unstable
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -13,23 +13,95 @@ fn mock_db() -> PathBuf {
     fixtures_dir().join("mock_db")
 }
 
-/// Returns the real ruby-advisory-db path if it exists locally.
-fn real_db_path() -> Option<PathBuf> {
-    let path = std::env::var("GEM_AUDIT_DB")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| dirs().unwrap_or_else(|| PathBuf::from(".")));
-    if path.join("gems").is_dir() {
-        Some(path)
-    } else {
-        None
-    }
+fn vulnerable_lock() -> PathBuf {
+    fixtures_dir().join("vulnerable_gem/Gemfile.lock")
 }
 
-fn dirs() -> Option<PathBuf> {
-    // Mirror Database::default_path() logic
-    let home = std::env::var("HOME").ok()?;
-    let path = PathBuf::from(home).join(".local/share/ruby-advisory-db");
-    Some(path)
+fn secure_lock() -> PathBuf {
+    fixtures_dir().join("secure/Gemfile.lock")
+}
+
+/// A path nested *inside* a regular file, so creating or opening anything at
+/// it fails on every platform.
+fn unwritable_path(tmp: &tempfile::TempDir) -> PathBuf {
+    let file = tmp.path().join("not-a-directory");
+    std::fs::write(&file, b"x").unwrap();
+    file.join("child")
+}
+
+/// Build a git-backed advisory database at `path` with a single `test` advisory.
+///
+/// The commit is dated 2020-09-13 so staleness checks always fire.
+fn init_git_db(path: &Path) {
+    init_git_db_at(path, 1_600_000_000)
+}
+
+/// As [`init_git_db`], but with an explicit commit timestamp.
+fn init_git_db_at(path: &Path, seconds: i64) {
+    const YAML: &str = "---\ngem: test\ncve: 2020-1234\npatched_versions:\n  - \">= 1.0.0\"\n";
+
+    std::fs::create_dir_all(path.join("gems").join("test")).unwrap();
+    std::fs::write(
+        path.join("gems").join("test").join("CVE-2020-1234.yml"),
+        YAML,
+    )
+    .unwrap();
+
+    let repo = gix::init(path).unwrap();
+    let blob = repo.write_blob(YAML.as_bytes()).unwrap().detach();
+
+    let tree = |entries: Vec<(&str, gix::ObjectId, gix::objs::tree::EntryKind)>| {
+        let mut t = gix::objs::Tree::empty();
+        for (name, oid, kind) in entries {
+            t.entries.push(gix::objs::tree::Entry {
+                mode: kind.into(),
+                filename: name.into(),
+                oid,
+            });
+        }
+        t.entries.sort();
+        repo.write_object(&t).unwrap().detach()
+    };
+
+    let gem = tree(vec![(
+        "CVE-2020-1234.yml",
+        blob,
+        gix::objs::tree::EntryKind::Blob,
+    )]);
+    let gems = tree(vec![("test", gem, gix::objs::tree::EntryKind::Tree)]);
+    let root = tree(vec![("gems", gems, gix::objs::tree::EntryKind::Tree)]);
+
+    let time = format!("{} +0000", seconds);
+    let sig = gix::actor::SignatureRef {
+        name: "gem-audit tests".into(),
+        email: "tests@example.com".into(),
+        time: time.as_str(),
+    };
+    repo.commit_as(
+        sig,
+        sig,
+        "HEAD",
+        "advisories",
+        root,
+        gix::commit::NO_PARENT_IDS,
+    )
+    .unwrap();
+}
+
+/// Clone a local advisory-db repository so the copy has an `origin` to fetch from.
+fn copy_git_clone(origin: &Path, dest: &Path) {
+    let (mut checkout, _) = gix::prepare_clone(origin.to_str().unwrap(), dest)
+        .unwrap()
+        .fetch_then_checkout(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
+        .unwrap();
+    checkout
+        .main_worktree(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
+        .unwrap();
+}
+
+/// A fresh temporary directory that is removed when the test ends.
+fn scratch(name: &str) -> tempfile::TempDir {
+    tempfile::Builder::new().prefix(name).tempdir().unwrap()
 }
 
 // ==================== version ====================
@@ -83,27 +155,25 @@ fn check_insecure_sources() {
         .stdout(predicate::str::contains("Insecure Source URI found"));
 }
 
-// ==================== check — unpatched gems (real DB) ====================
+// ==================== check — unpatched gems ====================
 
 #[test]
 fn check_unpatched_gems() {
-    let Some(db) = real_db_path() else { return };
-
     Command::cargo_bin("gem-audit")
         .unwrap()
         .args([
             "check",
             "--database",
-            db.to_str().unwrap(),
+            mock_db().to_str().unwrap(),
             "--gemfile-lock",
-            fixtures_dir()
-                .join("unpatched_gems/Gemfile.lock")
-                .to_str()
-                .unwrap(),
+            vulnerable_lock().to_str().unwrap(),
         ])
         .assert()
-        .failure()
-        .stdout(predicate::str::contains("Vulnerabilities found!"));
+        .code(1)
+        .stdout(
+            predicate::str::contains("Vulnerabilities found!")
+                .and(predicate::str::contains("CVE-2020-1234")),
+        );
 }
 
 // ==================== check --quiet ====================
@@ -144,7 +214,10 @@ fn check_json_secure() {
         .unwrap();
 
     assert!(output.status.success());
-    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let text = String::from_utf8(output.stdout).unwrap();
+    // stdout is a pipe here, so the document must be compact.
+    assert_eq!(text.trim_end().lines().count(), 1, "{}", text);
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(parsed["results"].as_array().unwrap().len(), 0);
 }
 
@@ -202,55 +275,31 @@ fn check_output_to_file() {
     let _ = std::fs::remove_file(&tmp);
 }
 
-// ==================== check --ignore (real DB) ====================
+// ==================== check --ignore ====================
 
 #[test]
 fn check_ignore_advisory() {
-    let Some(db) = real_db_path() else { return };
-
-    // First run without ignore to confirm vulnerabilities exist
     Command::cargo_bin("gem-audit")
         .unwrap()
         .args([
             "check",
             "--database",
-            db.to_str().unwrap(),
+            mock_db().to_str().unwrap(),
             "--gemfile-lock",
-            fixtures_dir()
-                .join("unpatched_gems/Gemfile.lock")
-                .to_str()
-                .unwrap(),
+            vulnerable_lock().to_str().unwrap(),
+            "--ignore",
+            "CVE-2020-1234",
         ])
         .assert()
-        .failure();
-
-    // Run with --ignore for a known CVE — should still find others but the ignored one is absent
-    let output = Command::cargo_bin("gem-audit")
-        .unwrap()
-        .args([
-            "check",
-            "--database",
-            db.to_str().unwrap(),
-            "--gemfile-lock",
-            fixtures_dir()
-                .join("unpatched_gems/Gemfile.lock")
-                .to_str()
-                .unwrap(),
-            "--ignore",
-            "CVE-2015-7577",
-        ])
-        .output()
-        .unwrap();
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.contains("CVE-2015-7577"));
+        .success()
+        .stdout(predicate::str::contains("No vulnerabilities found"));
 }
 
-// ==================== check --config (real DB) ====================
+// ==================== check --config ====================
 
 #[test]
 fn check_with_config_ignore() {
-    let Some(db) = real_db_path() else { return };
+    let db = mock_db();
 
     let lockfile = fixtures_dir().join("unpatched_gems_with_config/Gemfile.lock");
     let config = fixtures_dir().join("unpatched_gems_with_config/.gem-audit.yml");
@@ -304,11 +353,13 @@ fn check_missing_gemfile_lock() {
         .stderr(predicate::str::is_empty().not());
 }
 
-// ==================== stats (real DB) ====================
+// ==================== stats ====================
 
 #[test]
 fn stats_subcommand() {
-    let Some(db) = real_db_path() else { return };
+    let tmp = scratch("gem-audit-stats");
+    let db = tmp.path().to_path_buf();
+    init_git_db(&db);
 
     Command::cargo_bin("gem-audit")
         .unwrap()
@@ -317,22 +368,112 @@ fn stats_subcommand() {
         .success()
         .stdout(
             predicate::str::contains("ruby-advisory-db:")
-                .and(predicate::str::contains("advisories:")),
+                .and(predicate::str::contains("advisories:"))
+                .and(predicate::str::contains("last updated:"))
+                .and(predicate::str::contains("commit:"))
+                // No rubies/ directory, so the per-kind breakdown is omitted.
+                .and(predicate::str::contains("gems:").not())
+                .and(predicate::str::contains("rubies:").not()),
         );
 }
 
-// ==================== update — existing DB ====================
+#[test]
+fn stats_missing_database() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args(["stats", "--database", "/nonexistent/advisory-db"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Failed to open advisory database"));
+}
+
+// ==================== update ====================
 
 #[test]
-fn update_existing_db() {
-    let Some(db) = real_db_path() else { return };
+fn update_git_database() {
+    let tmp = scratch("gem-audit-update");
+    let origin = tmp.path().join("origin");
+    init_git_db(&origin);
+
+    // Clone it so the copy has an origin to fetch from.
+    let clone = tmp.path().join("clone");
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args(["stats", "--database", origin.to_str().unwrap()])
+        .assert()
+        .success();
+    copy_git_clone(&origin, &clone);
 
     Command::cargo_bin("gem-audit")
         .unwrap()
-        .args(["update", "--database", db.to_str().unwrap()])
+        .args(["update", "--database", clone.to_str().unwrap()])
         .assert()
         .success()
-        .stderr(predicate::str::contains("ruby-advisory-db"));
+        .stderr(
+            predicate::str::contains("Updating ruby-advisory-db")
+                .and(predicate::str::contains("Updated ruby-advisory-db")),
+        );
+}
+
+#[test]
+fn update_non_git_database_is_skipped() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args(["update", "--database", mock_db().to_str().unwrap()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Skipping update, ruby-advisory-db is not a git repository",
+        ));
+}
+
+#[test]
+fn update_quiet_prints_nothing() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "update",
+            "--quiet",
+            "--database",
+            mock_db().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn update_fails_when_origin_is_gone() {
+    let tmp = scratch("gem-audit-update-broken");
+    let origin = tmp.path().join("origin");
+    init_git_db(&origin);
+    let clone = tmp.path().join("clone");
+    copy_git_clone(&origin, &clone);
+    std::fs::remove_dir_all(&origin).unwrap();
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args(["update", "--database", clone.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Failed to update"));
+}
+
+#[test]
+fn update_download_failure_is_reported() {
+    let tmp = scratch("gem-audit-update-unwritable");
+    let target = unwritable_path(&tmp);
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args(["update", "--database", target.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(
+            predicate::str::contains("Downloading ruby-advisory-db")
+                .and(predicate::str::contains("Failed to download")),
+        );
 }
 
 // ==================== check — nonexistent directory ====================
@@ -352,50 +493,42 @@ fn check_nonexistent_directory() {
         .stderr(predicate::str::contains("No such file or directory"));
 }
 
-// ==================== check --fix (real DB) ====================
+// ==================== check --fix ====================
 
 #[test]
 fn check_fix_text_output() {
-    let Some(db) = real_db_path() else { return };
-
     let output = Command::cargo_bin("gem-audit")
         .unwrap()
         .args([
             "check",
             "--fix",
+            "--dry-run",
             "--database",
-            db.to_str().unwrap(),
+            mock_db().to_str().unwrap(),
             "--gemfile-lock",
-            fixtures_dir()
-                .join("unpatched_gems/Gemfile.lock")
-                .to_str()
-                .unwrap(),
+            vulnerable_lock().to_str().unwrap(),
         ])
         .output()
         .unwrap();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Fixes:"));
+    assert!(stdout.contains("Fixes:"), "{}", stdout);
 }
 
 #[test]
 fn check_fix_json_output() {
-    let Some(db) = real_db_path() else { return };
-
     let output = Command::cargo_bin("gem-audit")
         .unwrap()
         .args([
             "check",
             "--fix",
+            "--dry-run",
             "--format",
             "json",
             "--database",
-            db.to_str().unwrap(),
+            mock_db().to_str().unwrap(),
             "--gemfile-lock",
-            fixtures_dir()
-                .join("unpatched_gems/Gemfile.lock")
-                .to_str()
-                .unwrap(),
+            vulnerable_lock().to_str().unwrap(),
         ])
         .output()
         .unwrap();
@@ -404,6 +537,30 @@ fn check_fix_json_output() {
     let remediations = parsed["remediations"].as_array().unwrap();
     assert!(!remediations.is_empty());
     assert!(remediations[0]["status"].as_str().is_some());
+}
+
+#[test]
+fn check_fix_rewrites_the_lockfile() {
+    let tmp = scratch("gem-audit-fix");
+    let lockfile = tmp.path().join("Gemfile.lock");
+    std::fs::copy(vulnerable_lock(), &lockfile).unwrap();
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--fix",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            lockfile.to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("Run `bundle install`"));
+
+    let patched = std::fs::read_to_string(&lockfile).unwrap();
+    assert!(!patched.contains("test (0.5.0)"), "{}", patched);
 }
 
 // ==================== check --fix on clean project ====================
@@ -428,60 +585,25 @@ fn check_fix_no_remediation_when_clean() {
         );
 }
 
-// ==================== check --severity (real DB) ====================
+// ==================== check --severity ====================
 
 #[test]
 fn check_severity_filter() {
-    let Some(db) = real_db_path() else { return };
-
-    let all_output = Command::cargo_bin("gem-audit")
+    // CVE-2020-1234 is Critical (9.8), so a `critical` threshold keeps it ...
+    Command::cargo_bin("gem-audit")
         .unwrap()
         .args([
             "check",
-            "--format",
-            "json",
-            "--database",
-            db.to_str().unwrap(),
-            "--gemfile-lock",
-            fixtures_dir()
-                .join("unpatched_gems/Gemfile.lock")
-                .to_str()
-                .unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    let filtered_output = Command::cargo_bin("gem-audit")
-        .unwrap()
-        .args([
-            "check",
-            "--format",
-            "json",
             "--severity",
             "critical",
             "--database",
-            db.to_str().unwrap(),
+            mock_db().to_str().unwrap(),
             "--gemfile-lock",
-            fixtures_dir()
-                .join("unpatched_gems/Gemfile.lock")
-                .to_str()
-                .unwrap(),
+            vulnerable_lock().to_str().unwrap(),
         ])
-        .output()
-        .unwrap();
-
-    let all: serde_json::Value = serde_json::from_slice(&all_output.stdout).unwrap();
-    let filtered: serde_json::Value = serde_json::from_slice(&filtered_output.stdout).unwrap();
-
-    let all_count = all["results"].as_array().unwrap().len();
-    let filtered_count = filtered["results"].as_array().unwrap().len();
-
-    assert!(
-        filtered_count <= all_count,
-        "severity filter should reduce or maintain result count: {} vs {}",
-        filtered_count,
-        all_count
-    );
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("CVE-2020-1234"));
 }
 
 // ==================== check — vulnerable Ruby version ====================
@@ -614,7 +736,7 @@ fn check_write_ignore_creates_config() {
         ])
         .assert()
         .success()
-        .stderr(predicate::str::contains("Added"));
+        .stderr(predicate::str::contains("Added 1 advisory ID(s)"));
 
     // Config file should exist and contain the advisory ID
     let content = std::fs::read_to_string(&config_path).unwrap();
@@ -650,7 +772,8 @@ fn check_write_ignore_merges_existing() {
         ])
         .assert()
         .success()
-        .stderr(predicate::str::contains("Added"));
+        // Only the newly discovered ID is counted, not the pre-existing one.
+        .stderr(predicate::str::contains("Added 1 advisory ID(s)"));
 
     let content = std::fs::read_to_string(&config_path).unwrap();
     // Should contain both old and new entries
@@ -704,4 +827,512 @@ fn stats_with_mock_db() {
                 .and(predicate::str::contains("gems:"))
                 .and(predicate::str::contains("rubies:")),
         );
+}
+
+// ==================== default subcommand ====================
+
+#[test]
+fn no_subcommand_checks_the_current_directory() {
+    let tmp = scratch("gem-audit-default");
+    std::fs::copy(secure_lock(), tmp.path().join("Gemfile.lock")).unwrap();
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .current_dir(tmp.path())
+        .env("GEM_AUDIT_DB", mock_db())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No vulnerabilities found"));
+}
+
+// ==================== check — database handling ====================
+
+#[test]
+fn check_download_failure_is_reported() {
+    let tmp = scratch("gem-audit-check-unwritable");
+    let target = unwritable_path(&tmp);
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--database",
+            target.to_str().unwrap(),
+            "--gemfile-lock",
+            secure_lock().to_str().unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "Failed to download advisory database",
+        ));
+}
+
+#[test]
+fn check_update_skips_non_git_database() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--update",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            secure_lock().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Skipping update, ruby-advisory-db is not a git repository",
+        ));
+}
+
+#[test]
+fn check_update_refreshes_git_database() {
+    let tmp = scratch("gem-audit-check-update");
+    let origin = tmp.path().join("origin");
+    init_git_db(&origin);
+    let clone = tmp.path().join("clone");
+    copy_git_clone(&origin, &clone);
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--update",
+            "--database",
+            clone.to_str().unwrap(),
+            "--gemfile-lock",
+            vulnerable_lock().to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("Updated ruby-advisory-db"));
+}
+
+#[test]
+fn check_update_failure_is_only_a_warning() {
+    let tmp = scratch("gem-audit-check-update-warn");
+    let origin = tmp.path().join("origin");
+    init_git_db(&origin);
+    let clone = tmp.path().join("clone");
+    copy_git_clone(&origin, &clone);
+    std::fs::remove_dir_all(&origin).unwrap();
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--update",
+            "--database",
+            clone.to_str().unwrap(),
+            "--gemfile-lock",
+            secure_lock().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "warning: Failed to update advisory database",
+        ));
+}
+
+// ==================== check — stale database ====================
+
+#[test]
+fn check_fail_on_stale_database() {
+    let tmp = scratch("gem-audit-stale");
+    let db = tmp.path().to_path_buf();
+    init_git_db(&db);
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--database",
+            db.to_str().unwrap(),
+            "--gemfile-lock",
+            secure_lock().to_str().unwrap(),
+            "--max-db-age",
+            "0",
+            "--fail-on-stale",
+        ])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("advisory database is"));
+}
+
+#[test]
+fn check_fresh_database_is_not_stale() {
+    let tmp = scratch("gem-audit-fresh");
+    let db = tmp.path().to_path_buf();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    init_git_db_at(&db, now);
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--database",
+            db.to_str().unwrap(),
+            "--gemfile-lock",
+            secure_lock().to_str().unwrap(),
+            "--max-db-age",
+            "30",
+            "--fail-on-stale",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("days old").not());
+}
+
+#[test]
+fn check_database_just_inside_the_age_limit() {
+    let tmp = scratch("gem-audit-age-boundary");
+    let db = tmp.path().to_path_buf();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    // Two days and one hour old: exactly at the limit, so not yet stale.
+    init_git_db_at(&db, now - 2 * 86_400 - 3_600);
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--database",
+            db.to_str().unwrap(),
+            "--gemfile-lock",
+            secure_lock().to_str().unwrap(),
+            "--max-db-age",
+            "2",
+            "--fail-on-stale",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("days old").not());
+}
+
+#[test]
+fn check_without_max_db_age_never_reports_staleness() {
+    let tmp = scratch("gem-audit-no-age-limit");
+    let db = tmp.path().to_path_buf();
+    init_git_db(&db);
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--database",
+            db.to_str().unwrap(),
+            "--gemfile-lock",
+            secure_lock().to_str().unwrap(),
+            "--fail-on-stale",
+        ])
+        .assert()
+        .success();
+}
+
+// ==================== check — strict mode ====================
+
+#[test]
+fn check_strict_fails_on_version_parse_errors() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--strict",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            fixtures_dir()
+                .join("bad_version/Gemfile.lock")
+                .to_str()
+                .unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("failed to parse version"));
+}
+
+#[test]
+fn check_strict_fails_on_advisory_load_errors() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--strict",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            fixtures_dir()
+                .join("broken_advisory/Gemfile.lock")
+                .to_str()
+                .unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("1 advisory load error"));
+}
+
+#[test]
+fn check_strict_succeeds_without_errors() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--strict",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            secure_lock().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Warnings:").not());
+}
+
+// ==================== check — invalid config ====================
+
+#[test]
+fn check_invalid_config_is_an_error() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            secure_lock().to_str().unwrap(),
+            "--config",
+            fixtures_dir()
+                .join("config/bad/ignore_is_not_an_array.yml")
+                .to_str()
+                .unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("invalid configuration"));
+}
+
+// ==================== check — unwritable outputs ====================
+
+#[test]
+fn check_output_file_failure_is_an_error() {
+    let tmp = scratch("gem-audit-output-unwritable");
+    let target = unwritable_path(&tmp);
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            secure_lock().to_str().unwrap(),
+            "--output",
+            target.to_str().unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Failed to open output file"));
+}
+
+#[test]
+fn check_write_ignore_failure_is_an_error() {
+    let tmp = scratch("gem-audit-config-unwritable");
+    let target = unwritable_path(&tmp);
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--write-ignore",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            vulnerable_lock().to_str().unwrap(),
+            "--config",
+            target.to_str().unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Failed to write config"));
+}
+
+// ==================== check --fix — partial and impossible fixes ====================
+
+#[test]
+fn check_fix_reports_unresolvable_alongside_fixed() {
+    let tmp = scratch("gem-audit-mixed-fix");
+    let lockfile = tmp.path().join("Gemfile.lock");
+    std::fs::copy(fixtures_dir().join("mixed_fix/Gemfile.lock"), &lockfile).unwrap();
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--fix",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            lockfile.to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .stdout(
+            predicate::str::contains("no safe version found")
+                .and(predicate::str::contains("test (0.5.0 ->")),
+        )
+        .stderr(predicate::str::contains("Fixed 1 gem(s)"));
+
+    let patched = std::fs::read_to_string(&lockfile).unwrap();
+    assert!(patched.contains("unfixable (0.5.0)"), "{}", patched);
+}
+
+#[test]
+fn check_fix_writes_nothing_when_no_gem_is_fixable() {
+    let tmp = scratch("gem-audit-unfixable");
+    let lockfile = tmp.path().join("Gemfile.lock");
+    std::fs::copy(fixtures_dir().join("unfixable_gem/Gemfile.lock"), &lockfile).unwrap();
+    let before = std::fs::read_to_string(&lockfile).unwrap();
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--fix",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            lockfile.to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("no safe version found"))
+        .stderr(predicate::str::contains("Fixed").not());
+
+    assert_eq!(std::fs::read_to_string(&lockfile).unwrap(), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn check_fix_reports_a_write_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = scratch("gem-audit-fix-readonly");
+    let lockfile = tmp.path().join("Gemfile.lock");
+    std::fs::copy(vulnerable_lock(), &lockfile).unwrap();
+
+    // The lockfile stays readable, but the temporary file cannot be created.
+    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+
+    let assertion = Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--fix",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            lockfile.to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error: failed to write"));
+
+    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    drop(assertion);
+}
+
+// ==================== default database path ====================
+
+#[test]
+fn missing_home_falls_back_to_a_relative_database_path() {
+    let tmp = scratch("gem-audit-no-home");
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .arg("stats")
+        .current_dir(tmp.path())
+        .env_remove("HOME")
+        .env_remove("GEM_AUDIT_DB")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(".ruby-advisory-db"));
+}
+
+// ==================== check — report write failure ====================
+
+/// `/dev/full` accepts `open` but fails every write; it only exists on Linux.
+#[cfg(target_os = "linux")]
+#[test]
+fn check_report_write_failure_is_an_error() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            secure_lock().to_str().unwrap(),
+            "--output",
+            "/dev/full",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error: write failed"));
+}
+
+// ==================== update — download from a mirror ====================
+
+#[test]
+fn update_downloads_from_the_configured_mirror() {
+    let tmp = scratch("gem-audit-mirror");
+    let origin = tmp.path().join("origin");
+    init_git_db(&origin);
+    let dest = tmp.path().join("fresh").join("advisory-db");
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args(["update", "--database", dest.to_str().unwrap()])
+        .env("GEM_AUDIT_DB_URL", &origin)
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("Downloading ruby-advisory-db")
+                .and(predicate::str::contains("Downloaded ruby-advisory-db")),
+        )
+        .stdout(predicate::str::contains("1 advisories"));
+
+    assert!(dest.join("gems").join("test").is_dir());
+}
+
+#[test]
+fn check_downloads_the_database_when_missing() {
+    let tmp = scratch("gem-audit-mirror-check");
+    let origin = tmp.path().join("origin");
+    init_git_db(&origin);
+    let dest = tmp.path().join("advisory-db");
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--quiet",
+            "--database",
+            dest.to_str().unwrap(),
+            "--gemfile-lock",
+            vulnerable_lock().to_str().unwrap(),
+        ])
+        .env("GEM_AUDIT_DB_URL", &origin)
+        .assert()
+        .code(1)
+        // `--quiet` silences the download chatter but not the findings.
+        .stderr(predicate::str::is_empty());
+
+    assert!(dest.join("gems").join("test").is_dir());
 }

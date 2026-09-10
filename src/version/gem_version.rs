@@ -257,7 +257,9 @@ fn parse_segments(input: &str) -> Result<Vec<Segment>, VersionError> {
                     VersionError::InvalidFormat(format!("numeric overflow: {}", num_str))
                 })?;
                 segments.push(Segment::Numeric(n));
-            } else if first.is_ascii_alphabetic() {
+            } else {
+                // `Version::parse` already rejected everything but ASCII
+                // alphanumerics, so a non-digit here is alphabetic.
                 let mut s = String::new();
                 while let Some(&c) = chars.peek() {
                     if c.is_ascii_alphabetic() {
@@ -268,8 +270,6 @@ fn parse_segments(input: &str) -> Result<Vec<Segment>, VersionError> {
                     }
                 }
                 segments.push(Segment::String(s));
-            } else {
-                return Err(VersionError::InvalidCharacter(first));
             }
         }
     }
@@ -294,18 +294,11 @@ impl Ord for Version {
         let a = &self.segments;
         let b = &other.segments;
         let max_len = a.len().max(b.len());
+        // Missing segment is implicitly 0
+        let zero = Segment::Numeric(0);
 
         for i in 0..max_len {
-            let seg_a = a.get(i);
-            let seg_b = b.get(i);
-
-            let ord = match (seg_a, seg_b) {
-                (Some(sa), Some(sb)) => sa.cmp(sb),
-                // Missing segment is implicitly 0
-                (Some(sa), None) => sa.cmp(&Segment::Numeric(0)),
-                (None, Some(sb)) => Segment::Numeric(0).cmp(sb),
-                (None, None) => Ordering::Equal,
-            };
+            let ord = a.get(i).unwrap_or(&zero).cmp(b.get(i).unwrap_or(&zero));
 
             if ord != Ordering::Equal {
                 return ord;
@@ -586,5 +579,104 @@ mod tests {
     fn display_prerelease() {
         let v = Version::parse("1.0.0.alpha").unwrap();
         assert_eq!(v.to_string(), "1.0.0.alpha");
+    }
+
+    // ========== Segment ordering ==========
+
+    #[test]
+    fn segment_partial_cmp_matches_cmp() {
+        let a = Segment::Numeric(1);
+        let b = Segment::Numeric(2);
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
+        assert_eq!(b.partial_cmp(&a), Some(Ordering::Greater));
+        assert_eq!(a.partial_cmp(&a), Some(Ordering::Equal));
+    }
+
+    #[test]
+    fn segment_numeric_greater_than_string() {
+        let num = Segment::Numeric(0);
+        let text = Segment::String("beta".to_string());
+        assert_eq!(num.cmp(&text), Ordering::Greater);
+        assert_eq!(text.cmp(&num), Ordering::Less);
+    }
+
+    #[test]
+    fn segment_strings_compare_lexically() {
+        let a = Segment::String("alpha".to_string());
+        let b = Segment::String("beta".to_string());
+        assert_eq!(a.cmp(&b), Ordering::Less);
+    }
+
+    // ========== parse edge cases ==========
+
+    #[test]
+    fn parse_only_dots_is_invalid_format() {
+        let err = Version::parse("..").unwrap_err();
+        assert_eq!(err, VersionError::InvalidFormat("..".to_string()));
+        assert_eq!(err.to_string(), "invalid version format: '..'");
+    }
+
+    #[test]
+    fn parse_skips_empty_segments() {
+        // The `continue` branch for empty dot-separated parts.
+        let v = Version::parse("1..2").unwrap();
+        assert_eq!(v.segments().len(), 2);
+        assert_eq!(v, Version::parse("1.2").unwrap());
+    }
+
+    #[test]
+    fn parse_numeric_overflow_is_invalid_format() {
+        let err = Version::parse("99999999999999999999999").unwrap_err();
+        assert!(
+            matches!(&err, VersionError::InvalidFormat(msg) if msg.contains("numeric overflow")),
+            "unexpected error: {:?}",
+            err
+        );
+    }
+
+    // ========== bump / increment_last / append_zero / segments ==========
+
+    #[test]
+    fn bump_drops_trailing_string_segments() {
+        // [1, 2, beta] → pop "beta" → [1, 2] → pop → [1] → increment → 2
+        let v = Version::parse("1.2.beta").unwrap();
+        assert_eq!(v.bump().to_string(), "2");
+    }
+
+    #[test]
+    fn bump_all_string_segments_yields_one() {
+        // [alpha] → pop → [] → push Numeric(1)
+        let v = Version::parse("alpha").unwrap();
+        assert_eq!(v.bump().to_string(), "1");
+    }
+
+    #[test]
+    fn increment_last_without_numeric_segment_is_unchanged() {
+        // The loop runs to completion without ever hitting `break`.
+        let v = Version::parse("alpha").unwrap();
+        assert_eq!(v.increment_last().to_string(), "alpha");
+    }
+
+    #[test]
+    fn append_zero_adds_trailing_zero() {
+        let v = Version::parse("1.2").unwrap();
+        let appended = v.append_zero();
+        assert_eq!(appended.to_string(), "1.2.0");
+        assert_eq!(appended.segments().len(), 3);
+        // Trailing zeros do not change ordering.
+        assert_eq!(appended, v);
+    }
+
+    #[test]
+    fn segments_exposes_parsed_parts() {
+        let v = Version::parse("1.0.rc").unwrap();
+        assert_eq!(
+            v.segments(),
+            &[
+                Segment::Numeric(1),
+                Segment::Numeric(0),
+                Segment::String("rc".to_string()),
+            ]
+        );
     }
 }

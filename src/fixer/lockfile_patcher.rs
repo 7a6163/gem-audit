@@ -274,4 +274,50 @@ DEPENDENCIES
         assert_eq!(v, "9.2.14.0");
         assert_eq!(p, Some("java"));
     }
+
+    #[test]
+    fn preserves_missing_trailing_newline() {
+        let content = "GEM\n  specs:\n    nokogiri (1.13.10)";
+        let fixes = vec![make_fix("nokogiri", "1.13.10", "1.14.0")];
+        let (patched, names) = patch_lockfile(content, &fixes);
+        assert_eq!(names, vec!["nokogiri".to_string()]);
+        assert!(!patched.ends_with('\n'));
+        assert!(patched.ends_with("nokogiri (1.14.0)"));
+    }
+
+    #[test]
+    fn ignores_spec_line_with_reversed_parens() {
+        let content = "GEM\n  specs:\n    nokogiri )1.13.10(\n";
+        let fixes = vec![make_fix("nokogiri", "1.13.10", "1.14.0")];
+        let (patched, names) = patch_lockfile(content, &fixes);
+        assert!(names.is_empty());
+        assert_eq!(patched, content);
+    }
+
+    #[test]
+    fn dependency_lines_are_never_patched() {
+        // The same gem appears as a 4-space spec line and as a 6-space
+        // dependency of another gem; only the spec line may be rewritten.
+        let content = "\
+GEM
+  specs:
+    nokogiri (1.13.10)
+    rails-html-sanitizer (1.4.4)
+      nokogiri (1.13.10)
+";
+        let fixes = vec![make_fix("nokogiri", "1.13.10", "1.14.0")];
+        let (patched, names) = patch_lockfile(content, &fixes);
+
+        assert_eq!(names, vec!["nokogiri".to_string()]);
+        assert_eq!(
+            patched,
+            "\
+GEM
+  specs:
+    nokogiri (1.14.0)
+    rails-html-sanitizer (1.4.4)
+      nokogiri (1.13.10)
+"
+        );
+    }
 }

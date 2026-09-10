@@ -120,6 +120,14 @@ mod tests {
         }
     }
 
+    /// The resolved version of a fix, or `"unresolvable"` when none was found.
+    fn resolved(result: &FixResult) -> String {
+        match result {
+            FixResult::Fixed(f) => f.resolved_version.to_string(),
+            FixResult::Unresolvable { .. } => "unresolvable".to_string(),
+        }
+    }
+
     #[test]
     fn single_advisory_gte() {
         let adv =
@@ -127,12 +135,7 @@ mod tests {
         let rem = make_remediation("test", "0.5.0", vec![adv]);
         let results = resolve_fixes(&[rem]);
         assert_eq!(results.len(), 1);
-        match &results[0] {
-            FixResult::Fixed(f) => {
-                assert_eq!(f.resolved_version, Version::parse("1.0.0").unwrap());
-            }
-            _ => panic!("expected Fixed"),
-        }
+        assert_eq!(resolved(&results[0]), "1.0.0");
     }
 
     #[test]
@@ -141,12 +144,7 @@ mod tests {
             make_advisory("---\ngem: test\ncve: 2020-0001\npatched_versions:\n  - \"~> 1.18.7\"\n");
         let rem = make_remediation("test", "1.18.0", vec![adv]);
         let results = resolve_fixes(&[rem]);
-        match &results[0] {
-            FixResult::Fixed(f) => {
-                assert_eq!(f.resolved_version, Version::parse("1.18.7").unwrap());
-            }
-            _ => panic!("expected Fixed"),
-        }
+        assert_eq!(resolved(&results[0]), "1.18.7");
     }
 
     #[test]
@@ -155,12 +153,7 @@ mod tests {
             make_advisory("---\ngem: test\ncve: 2020-0001\npatched_versions:\n  - \"> 1.0.0\"\n");
         let rem = make_remediation("test", "0.5.0", vec![adv]);
         let results = resolve_fixes(&[rem]);
-        match &results[0] {
-            FixResult::Fixed(f) => {
-                assert_eq!(f.resolved_version, Version::parse("1.0.1").unwrap());
-            }
-            _ => panic!("expected Fixed"),
-        }
+        assert_eq!(resolved(&results[0]), "1.0.1");
     }
 
     #[test]
@@ -171,12 +164,7 @@ mod tests {
         );
         let rem = make_remediation("test", "1.18.0", vec![adv]);
         let results = resolve_fixes(&[rem]);
-        match &results[0] {
-            FixResult::Fixed(f) => {
-                assert_eq!(f.resolved_version, Version::parse("1.18.7").unwrap());
-            }
-            _ => panic!("expected Fixed"),
-        }
+        assert_eq!(resolved(&results[0]), "1.18.7");
     }
 
     #[test]
@@ -190,12 +178,7 @@ mod tests {
             make_advisory("---\ngem: test\ncve: 2020-0002\npatched_versions:\n  - \">= 2.0\"\n");
         let rem = make_remediation("test", "1.0.0", vec![adv1, adv2]);
         let results = resolve_fixes(&[rem]);
-        match &results[0] {
-            FixResult::Fixed(f) => {
-                assert_eq!(f.resolved_version, Version::parse("2.0").unwrap());
-            }
-            _ => panic!("expected Fixed"),
-        }
+        assert_eq!(resolved(&results[0]), "2.0");
     }
 
     #[test]
@@ -203,7 +186,7 @@ mod tests {
         let adv = make_advisory("---\ngem: test\ncve: 2020-0001\npatched_versions: []\n");
         let rem = make_remediation("test", "1.0.0", vec![adv]);
         let results = resolve_fixes(&[rem]);
-        assert!(matches!(&results[0], FixResult::Unresolvable { .. }));
+        assert_eq!(resolved(&results[0]), "unresolvable");
     }
 
     #[test]
@@ -226,11 +209,31 @@ mod tests {
             make_advisory("---\ngem: test\ncve: 2020-0002\npatched_versions:\n  - \">= 5.0.1\"\n");
         let rem = make_remediation("test", "4.2.0", vec![adv1, adv2]);
         let results = resolve_fixes(&[rem]);
-        match &results[0] {
-            FixResult::Fixed(f) => {
-                assert_eq!(f.resolved_version, Version::parse("5.0.1").unwrap());
-            }
-            _ => panic!("expected Fixed"),
-        }
+        assert_eq!(resolved(&results[0]), "5.0.1");
+    }
+
+    #[test]
+    fn fix_result_name_for_both_variants() {
+        let adv =
+            make_advisory("---\ngem: test\ncve: 2020-0001\npatched_versions:\n  - \">= 1.0.0\"\n");
+        let results = resolve_fixes(&[make_remediation("test", "0.5.0", vec![adv])]);
+        assert_eq!(results[0].name(), "test");
+
+        let unfixable = make_advisory("---\ngem: other\ncve: 2020-0002\npatched_versions: []\n");
+        let results = resolve_fixes(&[make_remediation("other", "1.0.0", vec![unfixable])]);
+        assert_eq!(results[0].name(), "other");
+    }
+
+    #[test]
+    fn disjoint_advisories_are_unresolvable() {
+        // Each advisory pins an exact version, and no version satisfies both.
+        let adv1 =
+            make_advisory("---\ngem: test\ncve: 2020-0001\npatched_versions:\n  - \"= 1.0\"\n");
+        let adv2 =
+            make_advisory("---\ngem: test\ncve: 2020-0002\npatched_versions:\n  - \"= 2.0\"\n");
+        let rem = make_remediation("test", "0.9.0", vec![adv1, adv2]);
+        let results = resolve_fixes(&[rem]);
+        assert_eq!(resolved(&results[0]), "unresolvable");
+        assert_eq!(results[0].name(), "test");
     }
 }

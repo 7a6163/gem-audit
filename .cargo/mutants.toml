@@ -1,0 +1,21 @@
+# cargo-mutants configuration.
+#
+# CI runs `cargo mutants --in-diff` on every pull request, so each mutant on a
+# line you touch has to be killed by a test.
+
+exclude_re = [
+    # Only reached after successfully cloning from a real remote; `clone_from`,
+    # which does the work, is covered against a local origin instead, and
+    # `GEM_AUDIT_DB_URL` lets the CLI tests exercise the full download path.
+    "Database::download",
+    "delete ! in download_database",
+]
+
+# Known survivor that cannot be excluded here, because cargo-mutants does not
+# apply `exclude_re` to struct-field deletions:
+#
+# * `delete field overwrite_existing ... in Database::checkout_head` — gix
+#   opens worktree files with truncate on this path, so the flag only changes
+#   what happens when a worktree entry clashes with an incoming directory (or
+#   the reverse). A real advisory database can reach that state; a test cannot
+#   reasonably construct it.
