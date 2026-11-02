@@ -18,7 +18,7 @@ gem install required.
 * Checks for insecure gem sources (`http://` and `git://`).
 * Allows ignoring specific advisories via CLI flags or a configuration file.
 * Filters by severity threshold (`--severity`).
-* Warns when the advisory database is stale (`--max-db-age`).
+* Warns when the advisory database is more than 7 days old (configurable with `--max-db-age`).
 * Strict mode treats parse/load warnings as errors (`--strict`).
 * Semantic exit codes for CI/CD integration (0/1/2/3).
 * Prints advisory information (CVE, GHSA, CVSS criticality, solution).
@@ -237,8 +237,8 @@ accepts the same options and directory (e.g. `gem-audit --severity high`).
 | `-c`, `--config <FILE>`     | Configuration file (default: `.gem-audit.yml`) |
 | `-o`, `--output <FILE>`     | Write output to a file instead of stdout   |
 | `-S`, `--severity <LEVEL>`  | Minimum severity: `none`, `low`, `medium`, `high`, `critical` (advisories with no CVSS score are always reported) |
-| `--max-db-age <DAYS>`       | Warn if the advisory database is older than DAYS days |
-| `--fail-on-stale`           | Exit with code 3 if the database is stale  |
+| `--max-db-age <DAYS>`       | Warn if the advisory database is older than DAYS days (default: 7) |
+| `--fail-on-stale`           | Exit with code 3 if the database is older than `--max-db-age` / `max_db_age_days` (the default 7-day warning alone does not fail) |
 | `--strict`                  | Treat parse/load warnings as errors (exit code 2) |
 | `--fix`                     | Patch vulnerable gem versions in `Gemfile.lock`    |
 | `--dry-run`                 | Preview `--fix` changes without writing (use with `--fix`) |
