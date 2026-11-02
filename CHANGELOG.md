@@ -1,4 +1,19 @@
-### Unreleased
+### 2.12.0 / 2026-11-02
+
+#### Added
+
+* **Stale database warning by default.** Without `--max-db-age` or
+  `max_db_age_days`, `check` now warns on stderr when the advisory database is
+  more than 7 days old and suggests `gem-audit update` / `--update`. It is a
+  warning only: `--fail-on-stale` still acts only on an explicitly configured
+  limit, so exit codes are unchanged.
+
+#### Changed
+
+* **Check options work without the `check` subcommand.** `gem-audit --severity
+  high` and every other check option (and DIR) are now accepted at the top
+  level, as the README already described.
+* **`--dry-run` now requires `--fix`** instead of being silently ignored.
 
 #### Fixed
 
@@ -12,12 +27,28 @@
 * **`--write-ignore` keeps failing on what it can't ignore.** It exited 0 even
   when insecure sources or advisories with no CVE/GHSA/OSVDB ID remained, and
   skipped the `--strict` and `--fail-on-stale` checks.
+* **`~>` now matches RubyGems for prereleases.** `~> 4.1.0.beta2` matched no
+  version at all, a false positive for e.g. rails 4.1.0.rc1 under CVE-2014-0081;
+  and the upper bound compared the full version instead of its release, so
+  4.1.0.beta1 counted as inside `~> 4.0.3` and a vulnerability was missed.
+* **`--ignore` no longer silently swallows the project directory.**
+  `check --ignore CVE-x path/to/app` put the directory into the ignore list and
+  failed with a misleading `Gemfile.lock not found`; it now reports the mistake
+  and how to fix it (put DIR first, or end the IDs with `--`).
+* **README:** `--fix` writes `Gemfile.lock` unless `--dry-run` is given (it was
+  described as dry-run only), and the nonexistent `download` subcommand is gone.
 
 #### Security
 
 * **Userinfo can no longer disguise a public source as internal.** A source like
   `http://localhost:x@evil.com/` was treated as `localhost` and exempted from
   the insecure-source check.
+* **Updated transitive dependencies** to clear `cargo audit`: `quinn-proto`
+  0.11.17 → 0.11.19 (RUSTSEC-2026-0338/0340/0343, remote panics, 7.5 high),
+  `rustls` 0.23.36 → 0.23.46 (RUSTSEC-2026-0285/0346/0348/0349),
+  `rustls-webpki` 0.103.15 → 0.103.16 (RUSTSEC-2026-0382, distrusted
+  intermediates accepted), `webpki-root-certs` 1.0.6 → 1.0.11
+  (RUSTSEC-2026-0383), and `tokio` 1.50.0.
 
 ### 2.11.0 / 2026-09-10
 
