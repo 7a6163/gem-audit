@@ -125,6 +125,22 @@ impl Version {
             .any(|s| matches!(s, Segment::String(_)))
     }
 
+    /// The release this version is a pre-release of, as Ruby's `Gem::Version#release`:
+    /// `1.2.0.beta2` -> `1.2.0`; a non-prerelease version is returned unchanged.
+    pub fn release(&self) -> Version {
+        let mut segments = self.segments.clone();
+        // Ruby pops while *any* segment is a string, so `beta2`'s trailing 2 goes too.
+        while segments.iter().any(|s| matches!(s, Segment::String(_))) {
+            segments.pop();
+        }
+        let original = segments
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join(".");
+        Version { segments, original }
+    }
+
     /// Bump this version: drop the last segment and increment the new last segment.
     ///
     /// This is equivalent to Ruby's `Gem::Version#bump`:
@@ -137,15 +153,7 @@ impl Version {
         // 2. Pop while any segment is a String (remove all string segments from end)
         // 3. Pop one more if more than 1 segment remains
         // 4. Increment the last segment
-        let mut new_segments = self.segments.clone();
-
-        // Remove trailing string segments
-        while new_segments
-            .last()
-            .is_some_and(|s| matches!(s, Segment::String(_)))
-        {
-            new_segments.pop();
-        }
+        let mut new_segments = self.release().segments;
 
         // Drop the last numeric segment if more than one remains
         if new_segments.len() > 1 {
@@ -641,6 +649,29 @@ mod tests {
         // [1, 2, beta] → pop "beta" → [1, 2] → pop → [1] → increment → 2
         let v = Version::parse("1.2.beta").unwrap();
         assert_eq!(v.bump().to_string(), "2");
+    }
+
+    #[test]
+    fn bump_prerelease_with_trailing_number() {
+        // Ruby: [4, 1, 0, "beta", 2] pops to [4, 1, 0] → [4, 1] → 4.2
+        let v = Version::parse("4.1.0.beta2").unwrap();
+        assert_eq!(v.bump().to_string(), "4.2");
+    }
+
+    #[test]
+    fn release_strips_prerelease_suffix_and_its_number() {
+        assert_eq!(
+            Version::parse("4.1.0.beta2").unwrap().release().to_string(),
+            "4.1.0"
+        );
+        assert_eq!(
+            Version::parse("1.0.rc1").unwrap().release().to_string(),
+            "1.0"
+        );
+        assert_eq!(
+            Version::parse("1.2.3").unwrap().release().to_string(),
+            "1.2.3"
+        );
     }
 
     #[test]
