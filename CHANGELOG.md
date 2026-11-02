@@ -27,6 +27,10 @@
 * **`--write-ignore` keeps failing on what it can't ignore.** It exited 0 even
   when insecure sources or advisories with no CVE/GHSA/OSVDB ID remained, and
   skipped the `--strict` and `--fail-on-stale` checks.
+* **`~>` now matches RubyGems for prereleases.** `~> 4.1.0.beta2` matched no
+  version at all, a false positive for e.g. rails 4.1.0.rc1 under CVE-2014-0081;
+  and the upper bound compared the full version instead of its release, so
+  4.1.0.beta1 counted as inside `~> 4.0.3` and a vulnerability was missed.
 * **`--ignore` no longer silently swallows the project directory.**
   `check --ignore CVE-x path/to/app` put the directory into the ignore list and
   failed with a misleading `Gemfile.lock not found`; it now reports the mistake
