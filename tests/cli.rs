@@ -845,6 +845,88 @@ fn no_subcommand_checks_the_current_directory() {
         .stdout(predicate::str::contains("No vulnerabilities found"));
 }
 
+#[test]
+fn no_subcommand_accepts_check_options() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "--severity",
+            "high",
+            "--database",
+            mock_db().to_str().unwrap(),
+            fixtures_dir().join("vulnerable_gem").to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("CVE-2020-1234"));
+}
+
+#[test]
+fn subcommand_still_wins_over_default_check() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .arg("version")
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("gem-audit "));
+}
+
+// ==================== check — argument mistakes ====================
+
+#[test]
+fn ignore_swallowing_the_directory_is_reported() {
+    let dir = fixtures_dir().join("vulnerable_gem");
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--ignore",
+            "CVE-2020-1234",
+            dir.to_str().unwrap(),
+            "--database",
+            mock_db().to_str().unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "is a directory, not an advisory ID",
+        ));
+}
+
+#[test]
+fn ignore_list_ended_with_double_dash_reads_the_directory() {
+    let dir = fixtures_dir().join("vulnerable_gem");
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--ignore",
+            "CVE-2020-1234",
+            "--",
+            dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn dry_run_requires_fix() {
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--dry-run",
+            "--database",
+            mock_db().to_str().unwrap(),
+            fixtures_dir().join("vulnerable_gem").to_str().unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--fix"));
+}
+
 // ==================== check — database handling ====================
 
 #[test]
