@@ -429,12 +429,14 @@ fn cmd_check(opts: CheckOptions) -> Result<(), i32> {
         );
     }
 
-    if opts.write_ignore && report.vulnerable() {
-        return write_ignore_list(&report, &config, &config_path);
-    }
-
     if report.vulnerable() {
-        return Err(EXIT_VULNERABLE);
+        if !opts.write_ignore {
+            return Err(EXIT_VULNERABLE);
+        }
+        write_ignore_list(&report, &config, &config_path)?;
+        if check::has_unignorable_findings(&report) {
+            return Err(EXIT_VULNERABLE);
+        }
     }
 
     if opts.strict && (report.version_parse_errors > 0 || report.advisory_load_errors > 0) {

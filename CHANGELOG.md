@@ -1,3 +1,24 @@
+### Unreleased
+
+#### Fixed
+
+* **`--fix` no longer downgrades.** It picked the smallest patched version even
+  when that was below the installed one (e.g. rails 6.0.0 → 5.2.4.3); it now
+  only suggests upgrades, and reports the gem as unresolvable otherwise.
+* **`--severity` no longer hides unscored advisories.** Advisories without a
+  CVSS v2/v3 score were silently dropped by any `--severity` threshold. Severity
+  now also reads `cvss_v4`, and advisories with no score at all are always
+  reported.
+* **`--write-ignore` keeps failing on what it can't ignore.** It exited 0 even
+  when insecure sources or advisories with no CVE/GHSA/OSVDB ID remained, and
+  skipped the `--strict` and `--fail-on-stale` checks.
+
+#### Security
+
+* **Userinfo can no longer disguise a public source as internal.** A source like
+  `http://localhost:x@evil.com/` was treated as `localhost` and exempted from
+  the insecure-source check.
+
 ### 2.11.0 / 2026-09-10
 
 #### Added

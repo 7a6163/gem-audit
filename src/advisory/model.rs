@@ -63,6 +63,8 @@ struct AdvisoryYaml {
     #[serde(default)]
     cvss_v3: Option<f64>,
     #[serde(default)]
+    cvss_v4: Option<f64>,
+    #[serde(default)]
     framework: Option<String>,
     #[serde(default)]
     patched_versions: Option<Vec<String>>,
@@ -98,6 +100,8 @@ pub struct Advisory {
     pub cvss_v2: Option<f64>,
     /// CVSS v3 score (0.0-10.0).
     pub cvss_v3: Option<f64>,
+    /// CVSS v4 score (0.0-10.0).
+    pub cvss_v4: Option<f64>,
     /// Framework (e.g., "rails").
     pub framework: Option<String>,
     /// Version requirements for patched versions.
@@ -163,6 +167,7 @@ impl Advisory {
             description: raw.description,
             cvss_v2: raw.cvss_v2,
             cvss_v3: raw.cvss_v3,
+            cvss_v4: raw.cvss_v4,
             framework: raw.framework,
             patched_versions,
             unaffected_versions,
@@ -215,9 +220,9 @@ impl Advisory {
 
     /// Determine the criticality based on CVSS scores.
     ///
-    /// CVSS v3 is preferred over v2. Scoring follows NIST/NVD guidelines.
+    /// CVSS v3 is preferred, then v4 (same NVD ranges), then v2.
     pub fn criticality(&self) -> Option<Criticality> {
-        if let Some(score) = self.cvss_v3 {
+        if let Some(score) = self.cvss_v3.or(self.cvss_v4) {
             Some(match score {
                 0.0 => Criticality::None,
                 s if s < 4.0 => Criticality::Low,
@@ -361,6 +366,22 @@ mod tests {
         let yaml = "---\ngem: test\ncvss_v2: 7.5\npatched_versions:\n  - \">= 1.0\"\n";
         let adv = Advisory::from_yaml(yaml, Path::new("test.yml")).unwrap();
         assert_eq!(adv.criticality(), Some(Criticality::High));
+    }
+
+    #[test]
+    fn criticality_uses_cvss_v4_when_no_v3() {
+        let yaml =
+            "---\ngem: test\ncvss_v4: 8.7\ncvss_v2: 5.0\npatched_versions:\n  - \">= 1.0\"\n";
+        let adv = Advisory::from_yaml(yaml, Path::new("test.yml")).unwrap();
+        assert_eq!(adv.criticality(), Some(Criticality::High));
+    }
+
+    #[test]
+    fn criticality_prefers_cvss_v3_over_v4() {
+        let yaml =
+            "---\ngem: test\ncvss_v3: 5.0\ncvss_v4: 9.5\npatched_versions:\n  - \">= 1.0\"\n";
+        let adv = Advisory::from_yaml(yaml, Path::new("test.yml")).unwrap();
+        assert_eq!(adv.criticality(), Some(Criticality::Medium));
     }
 
     #[test]

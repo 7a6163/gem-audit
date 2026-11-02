@@ -784,6 +784,59 @@ fn check_write_ignore_merges_existing() {
 }
 
 #[test]
+fn check_write_ignore_still_fails_on_insecure_sources() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config_path = tmp.path().join(".gem-audit.yml");
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--write-ignore",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            fixtures_dir()
+                .join("insecure_sources/Gemfile.lock")
+                .to_str()
+                .unwrap(),
+            "--config",
+            config_path.to_str().unwrap(),
+        ])
+        .assert()
+        .code(1);
+}
+
+#[test]
+fn check_write_ignore_still_applies_fail_on_stale() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("db");
+    init_git_db(&db);
+    let config_path = tmp.path().join(".gem-audit.yml");
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--write-ignore",
+            "--max-db-age",
+            "1",
+            "--fail-on-stale",
+            "--database",
+            db.to_str().unwrap(),
+            "--gemfile-lock",
+            fixtures_dir()
+                .join("vulnerable_gem/Gemfile.lock")
+                .to_str()
+                .unwrap(),
+            "--config",
+            config_path.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3);
+}
+
+#[test]
 fn check_write_ignore_no_vulns_no_write() {
     let tmp = std::env::temp_dir().join("gem_audit_test_write_ignore_clean");
     let _ = std::fs::remove_dir_all(&tmp);
