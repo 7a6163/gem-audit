@@ -4,18 +4,22 @@ use std::time::SystemTime;
 use crate::advisory::Database;
 use crate::scanner::Report;
 
-/// Check whether the advisory database is stale.
+/// Age after which a stale database is warned about when no limit is configured.
+pub const DEFAULT_MAX_DB_AGE_DAYS: u64 = 7;
+
+/// Check whether the advisory database is stale, warning on stderr if so.
 ///
-/// Returns `true` if the database is older than the specified maximum age.
+/// Without a configured maximum age, a database older than
+/// [`DEFAULT_MAX_DB_AGE_DAYS`] is only warned about: this returns `true`
+/// (which `--fail-on-stale` acts on) only for an explicitly configured limit.
 pub fn check_staleness(
     db: &Database,
     max_db_age: Option<u64>,
     config_max_age: Option<u64>,
 ) -> bool {
-    let effective_max_age = max_db_age.or(config_max_age);
-    if let Some(max_days) = effective_max_age
-        && let Some(last_updated) = db.last_updated_at()
-    {
+    let configured = max_db_age.or(config_max_age);
+    let max_days = configured.unwrap_or(DEFAULT_MAX_DB_AGE_DAYS);
+    if let Some(last_updated) = db.last_updated_at() {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -23,10 +27,10 @@ pub fn check_staleness(
         let age_days = (now - last_updated) / 86400;
         if age_days > max_days as i64 {
             eprintln!(
-                "warning: advisory database is {} days old (max: {} days)",
+                "warning: advisory database is {} days old (max: {} days); run `gem-audit update` or pass --update",
                 age_days, max_days
             );
-            return true;
+            return configured.is_some();
         }
     }
     false

@@ -1152,7 +1152,7 @@ fn check_database_just_inside_the_age_limit() {
 }
 
 #[test]
-fn check_without_max_db_age_never_reports_staleness() {
+fn check_without_max_db_age_warns_but_does_not_fail_on_stale() {
     let tmp = scratch("gem-audit-no-age-limit");
     let db = tmp.path().to_path_buf();
     init_git_db(&db);
@@ -1168,7 +1168,34 @@ fn check_without_max_db_age_never_reports_staleness() {
             "--fail-on-stale",
         ])
         .assert()
-        .success();
+        .success()
+        .stderr(predicate::str::contains("(max: 7 days)"))
+        .stderr(predicate::str::contains("gem-audit update"));
+}
+
+#[test]
+fn check_without_max_db_age_is_quiet_for_a_week_old_database() {
+    let tmp = scratch("gem-audit-default-age-boundary");
+    let db = tmp.path().to_path_buf();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    // Seven days and one hour old: at the default limit, so not yet stale.
+    init_git_db_at(&db, now - 7 * 86_400 - 3_600);
+
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--database",
+            db.to_str().unwrap(),
+            "--gemfile-lock",
+            secure_lock().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("days old").not());
 }
 
 // ==================== check — strict mode ====================
@@ -1450,7 +1477,12 @@ fn update_downloads_from_the_configured_mirror() {
 fn check_downloads_the_database_when_missing() {
     let tmp = scratch("gem-audit-mirror-check");
     let origin = tmp.path().join("origin");
-    init_git_db(&origin);
+    // A fresh commit, so the default staleness warning stays out of stderr.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    init_git_db_at(&origin, now);
     let dest = tmp.path().join("advisory-db");
 
     Command::cargo_bin("gem-audit")
