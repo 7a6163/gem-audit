@@ -216,12 +216,12 @@ Vulnerabilities found! (1 vulnerable Ruby version)
 | Command    | Description                                              |
 |------------|----------------------------------------------------------|
 | `check`    | Check `Gemfile.lock` for insecure dependencies (default) |
-| `update`   | Update the ruby-advisory-db                              |
-| `download` | Download the ruby-advisory-db                            |
+| `update`   | Download or update the ruby-advisory-db                  |
 | `stats`    | Print ruby-advisory-db statistics                        |
 | `version`  | Print the gem-audit version                              |
 
-Running `gem-audit` with no subcommand is equivalent to `gem-audit check`.
+Running `gem-audit` with no subcommand is equivalent to `gem-audit check`, and
+accepts the same options and directory (e.g. `gem-audit --severity high`).
 
 ## Check Options
 

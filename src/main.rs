@@ -25,10 +25,15 @@ const EXIT_STALE: i32 = 3;
     name = "gem-audit",
     about = "Patch-level verification for Ruby Bundler dependencies",
     version = VERSION,
+    args_conflicts_with_subcommands = true,
 )]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+
+    /// With no subcommand, `check` runs with these options.
+    #[command(flatten)]
+    check: CheckOptions,
 }
 
 #[derive(clap::Args)]
@@ -45,7 +50,7 @@ struct CheckOptions {
     #[arg(short, long)]
     verbose: bool,
 
-    /// Advisory IDs to ignore
+    /// Advisory IDs to ignore (takes several; put DIR before it, or end the list with --)
     #[arg(short, long, num_args = 1..)]
     ignore: Vec<String>,
 
@@ -94,7 +99,7 @@ struct CheckOptions {
     fix: bool,
 
     /// Preview fix changes without writing (use with --fix)
-    #[arg(long)]
+    #[arg(long, requires = "fix")]
     dry_run: bool,
 
     /// Write all detected advisory IDs to the config file's ignore list
@@ -142,35 +147,11 @@ fn main() {
             println!("gem-audit {}", VERSION);
             EXIT_SUCCESS
         }
-        None => to_code(cmd_check(CheckOptions::default())),
+        None => to_code(cmd_check(cli.check)),
     };
 
     if code != EXIT_SUCCESS {
         process::exit(code);
-    }
-}
-
-impl Default for CheckOptions {
-    fn default() -> Self {
-        Self {
-            dir: ".".to_string(),
-            quiet: false,
-            verbose: false,
-            ignore: Vec::new(),
-            update: false,
-            database: None,
-            format: OutputFormat::Text,
-            gemfile_lock: "Gemfile.lock".to_string(),
-            config: Configuration::DEFAULT_FILE.to_string(),
-            output: None,
-            severity: None,
-            max_db_age: None,
-            fail_on_stale: false,
-            strict: false,
-            fix: false,
-            dry_run: false,
-            write_ignore: false,
-        }
     }
 }
 
@@ -337,6 +318,15 @@ fn write_ignore_list(
 }
 
 fn cmd_check(opts: CheckOptions) -> Result<(), i32> {
+    // `--ignore` takes several values, so `--ignore CVE-1 path/to/app` swallows the directory.
+    if let Some(path) = opts.ignore.iter().find(|id| Path::new(id).is_dir()) {
+        eprintln!(
+            "'{}' is a directory, not an advisory ID: put the project directory before --ignore, or end the IDs with --",
+            path
+        );
+        return Err(EXIT_ERROR);
+    }
+
     let dir = Path::new(&opts.dir);
     if !dir.is_dir() {
         eprintln!("No such file or directory: {}", dir.display());
