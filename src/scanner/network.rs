@@ -52,14 +52,10 @@ fn is_internal_ip(ip: IpAddr) -> bool {
 fn extract_host(uri: &str) -> Option<String> {
     // Handle git:// , http:// , https://
     let after_scheme = uri.split("://").nth(1)?;
-    let host_port = after_scheme.split('/').next()?;
+    let authority = after_scheme.split('/').next()?;
+    // Strip `user:pass@` first, or `localhost:x@evil.com` would yield `localhost`.
+    let host_port = authority.rsplit('@').next()?;
     let host = host_port.split(':').next()?;
-    // Strip user@ prefix
-    let host = if let Some(at_pos) = host.rfind('@') {
-        &host[at_pos + 1..]
-    } else {
-        host
-    };
     if host.is_empty() {
         None
     } else {
@@ -143,6 +139,20 @@ mod tests {
             extract_host("http://user@gems.example.com/"),
             Some("gems.example.com".to_string())
         );
+    }
+
+    #[test]
+    fn extract_host_with_user_and_password_and_port() {
+        assert_eq!(
+            extract_host("http://localhost:x@93.184.216.34:8080/"),
+            Some("93.184.216.34".to_string())
+        );
+    }
+
+    #[test]
+    fn userinfo_cannot_make_a_public_host_look_internal() {
+        assert!(!is_internal_source("http://localhost:x@93.184.216.34/"));
+        assert!(!is_internal_source("http://10.0.0.1:x@93.184.216.34/"));
     }
 
     // ========== Internal IP Detection ==========

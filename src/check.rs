@@ -75,6 +75,20 @@ pub fn build_ignore_comments(report: &Report) -> (HashSet<String>, HashMap<Strin
     )
 }
 
+/// Whether the report has findings an ignore list cannot silence: insecure
+/// sources, and advisories with no CVE/GHSA/OSVDB identifier to list.
+pub fn has_unignorable_findings(report: &Report) -> bool {
+    !report.insecure_sources.is_empty()
+        || report
+            .unpatched_gems
+            .iter()
+            .any(|gem| gem.advisory.identifiers().is_empty())
+        || report
+            .vulnerable_rubies
+            .iter()
+            .any(|ruby| ruby.advisory.identifiers().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,6 +104,65 @@ mod tests {
             version_parse_errors: 0,
             advisory_load_errors: 0,
         }
+    }
+
+    // ========== has_unignorable_findings ==========
+
+    fn advisory(yaml: &str) -> Advisory {
+        Advisory::from_yaml(yaml, Path::new("GHSA-xxxx-yyyy-zzzz.yml")).unwrap()
+    }
+
+    fn gem_report(advisory: Advisory) -> Report {
+        Report {
+            unpatched_gems: vec![UnpatchedGem {
+                name: "test".to_string(),
+                version: "0.5.0".to_string(),
+                advisory,
+            }],
+            ..empty_report()
+        }
+    }
+
+    fn ruby_report(advisory: Advisory) -> Report {
+        Report {
+            vulnerable_rubies: vec![VulnerableRuby {
+                engine: "ruby".to_string(),
+                version: "2.6.0".to_string(),
+                advisory,
+            }],
+            ..empty_report()
+        }
+    }
+
+    const NO_ID: &str = "---\ngem: test\npatched_versions:\n  - \">= 1.0\"\n";
+    const WITH_ID: &str = "---\ngem: test\ncve: 2020-1234\npatched_versions:\n  - \">= 1.0\"\n";
+
+    #[test]
+    fn unignorable_false_for_empty_report() {
+        assert!(!has_unignorable_findings(&empty_report()));
+    }
+
+    #[test]
+    fn unignorable_true_for_insecure_source() {
+        let report = Report {
+            insecure_sources: vec![InsecureSource {
+                source: "http://rubygems.org/".to_string(),
+            }],
+            ..empty_report()
+        };
+        assert!(has_unignorable_findings(&report));
+    }
+
+    #[test]
+    fn unignorable_depends_on_gem_advisory_identifiers() {
+        assert!(has_unignorable_findings(&gem_report(advisory(NO_ID))));
+        assert!(!has_unignorable_findings(&gem_report(advisory(WITH_ID))));
+    }
+
+    #[test]
+    fn unignorable_depends_on_ruby_advisory_identifiers() {
+        assert!(has_unignorable_findings(&ruby_report(advisory(NO_ID))));
+        assert!(!has_unignorable_findings(&ruby_report(advisory(WITH_ID))));
     }
 
     // ========== build_ignore_comments ==========

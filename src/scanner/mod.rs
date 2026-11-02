@@ -32,11 +32,11 @@ impl ScanOptions {
                 return false;
             }
         }
-        if let Some(threshold) = &self.severity {
-            match advisory.criticality() {
-                Some(crit) if crit >= *threshold => {}
-                _ => return false,
-            }
+        // An advisory with no CVSS score has unknown severity: report it rather than hide it.
+        if let (Some(threshold), Some(crit)) = (&self.severity, advisory.criticality())
+            && crit < *threshold
+        {
+            return false;
         }
         true
     }
@@ -556,6 +556,18 @@ RUBY VERSION
         let opts = ScanOptions::default();
         let (vulns, _) = scanner.scan_ruby(&opts);
         assert!(vulns.is_empty());
+    }
+
+    #[test]
+    fn should_report_keeps_unscored_advisory_under_severity_filter() {
+        let opts = ScanOptions {
+            severity: Some(Criticality::Critical),
+            ..Default::default()
+        };
+        let yaml = "---\ngem: test\ncve: 2020-1234\npatched_versions:\n  - \">= 1.0\"\n";
+        let advisory =
+            crate::advisory::Advisory::from_yaml(yaml, Path::new("CVE-2020-1234.yml")).unwrap();
+        assert!(opts.should_report(&advisory));
     }
 
     #[test]

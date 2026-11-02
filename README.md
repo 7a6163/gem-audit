@@ -136,10 +136,16 @@ Treat parse/load warnings as errors:
 $ gem-audit check --strict
 ```
 
-Show remediation suggestions (dry-run, no files modified):
+Patch vulnerable gem versions in `Gemfile.lock` (writes the file):
 
 ```
 $ gem-audit check --fix
+```
+
+Preview the fixes without modifying any files:
+
+```
+$ gem-audit check --fix --dry-run
 ```
 
 Ignore all detected vulnerabilities (writes to `.gem-audit.yml`):
@@ -230,11 +236,12 @@ Running `gem-audit` with no subcommand is equivalent to `gem-audit check`.
 | `-G`, `--gemfile-lock <FILE>` | Path to the Gemfile.lock file            |
 | `-c`, `--config <FILE>`     | Configuration file (default: `.gem-audit.yml`) |
 | `-o`, `--output <FILE>`     | Write output to a file instead of stdout   |
-| `-S`, `--severity <LEVEL>`  | Minimum severity: `none`, `low`, `medium`, `high`, `critical` |
+| `-S`, `--severity <LEVEL>`  | Minimum severity: `none`, `low`, `medium`, `high`, `critical` (advisories with no CVSS score are always reported) |
 | `--max-db-age <DAYS>`       | Warn if the advisory database is older than DAYS days |
 | `--fail-on-stale`           | Exit with code 3 if the database is stale  |
 | `--strict`                  | Treat parse/load warnings as errors (exit code 2) |
-| `--fix`                     | Show remediation suggestions for vulnerable gems   |
+| `--fix`                     | Patch vulnerable gem versions in `Gemfile.lock`    |
+| `--dry-run`                 | Preview `--fix` changes without writing (use with `--fix`) |
 | `--write-ignore`            | Write all detected advisory IDs to the config ignore list |
 
 ## Environment Variables

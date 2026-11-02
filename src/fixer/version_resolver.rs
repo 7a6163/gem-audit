@@ -69,6 +69,11 @@ fn resolve_single(remediation: &Remediation) -> FixResult {
         };
     }
 
+    // A fix must be an upgrade: a lower patched branch (e.g. 5.2.x for 6.0.0) is a downgrade.
+    if let Ok(current) = Version::parse(&remediation.version) {
+        candidates.retain(|c| *c > current);
+    }
+
     // Sort candidates ascending — try smallest first
     candidates.sort();
     candidates.dedup();
@@ -126,6 +131,31 @@ mod tests {
             FixResult::Fixed(f) => f.resolved_version.to_string(),
             FixResult::Unresolvable { .. } => "unresolvable".to_string(),
         }
+    }
+
+    #[test]
+    fn never_downgrades_to_an_older_patched_branch() {
+        let adv = make_advisory(
+            "---\ngem: rails\ncve: 2020-8164\npatched_versions:\n  - \"~> 5.2.4, >= 5.2.4.3\"\n  - \">= 6.0.3.1\"\n",
+        );
+        let rem = make_remediation("rails", "6.0.0", vec![adv]);
+        assert_eq!(resolved(&resolve_fixes(&[rem])[0]), "6.0.3.1");
+    }
+
+    #[test]
+    fn unresolvable_when_only_older_branches_are_patched() {
+        let adv =
+            make_advisory("---\ngem: test\ncve: 2020-0002\npatched_versions:\n  - \"~> 1.2.3\"\n");
+        let rem = make_remediation("test", "2.0.0", vec![adv]);
+        assert_eq!(resolved(&resolve_fixes(&[rem])[0]), "unresolvable");
+    }
+
+    #[test]
+    fn unparseable_current_version_skips_the_upgrade_filter() {
+        let adv =
+            make_advisory("---\ngem: test\ncve: 2020-0003\npatched_versions:\n  - \">= 1.0.0\"\n");
+        let rem = make_remediation("test", "not a version!", vec![adv]);
+        assert_eq!(resolved(&resolve_fixes(&[rem])[0]), "1.0.0");
     }
 
     #[test]
