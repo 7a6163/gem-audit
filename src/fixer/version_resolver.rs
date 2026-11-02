@@ -151,6 +151,14 @@ mod tests {
     }
 
     #[test]
+    fn unparseable_current_version_skips_the_upgrade_filter() {
+        let adv =
+            make_advisory("---\ngem: test\ncve: 2020-0003\npatched_versions:\n  - \">= 1.0.0\"\n");
+        let rem = make_remediation("test", "not a version!", vec![adv]);
+        assert_eq!(resolved(&resolve_fixes(&[rem])[0]), "1.0.0");
+    }
+
+    #[test]
     fn single_advisory_gte() {
         let adv =
             make_advisory("---\ngem: test\ncve: 2020-0001\npatched_versions:\n  - \">= 1.0.0\"\n");
