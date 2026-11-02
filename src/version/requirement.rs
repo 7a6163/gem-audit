@@ -56,8 +56,9 @@ impl VersionConstraint {
             Operator::Pessimistic => {
                 // ~> X.Y.Z means >= X.Y.Z AND < X.Y+1.0
                 // ~> X.Y means >= X.Y AND < X+1.0
+                // As in RubyGems, the upper bound compares the release, so 4.1.0.beta1 is outside ~> 4.0.3.
                 let upper = self.version.bump();
-                version >= &self.version && version < &upper
+                version >= &self.version && version.release() < upper
             }
         }
     }
@@ -383,6 +384,25 @@ mod tests {
     }
 
     // ========== Pessimistic Operator (~>) ==========
+
+    #[test]
+    fn pessimistic_prerelease_with_trailing_number() {
+        // rails CVE-2014-0081 lists `~> 4.1.0.beta2`: >= 4.1.0.beta2, < 4.2
+        let req = Requirement::parse("~> 4.1.0.beta2").unwrap();
+        assert!(req.satisfied_by(&Version::parse("4.1.0.beta2").unwrap()));
+        assert!(req.satisfied_by(&Version::parse("4.1.0.rc1").unwrap()));
+        assert!(req.satisfied_by(&Version::parse("4.1.5").unwrap()));
+        assert!(!req.satisfied_by(&Version::parse("4.1.0.beta1").unwrap()));
+        assert!(!req.satisfied_by(&Version::parse("4.2.0").unwrap()));
+    }
+
+    #[test]
+    fn pessimistic_upper_bound_compares_the_release() {
+        // RubyGems: v.release < r.bump, so a prerelease of the next minor is outside.
+        let req = Requirement::parse("~> 4.0.3").unwrap();
+        assert!(!req.satisfied_by(&Version::parse("4.1.0.beta1").unwrap()));
+        assert!(req.satisfied_by(&Version::parse("4.0.9").unwrap()));
+    }
 
     #[test]
     fn pessimistic_two_segments() {
