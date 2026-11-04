@@ -119,14 +119,16 @@ impl Configuration {
 
     /// Extract inline `# comments` from YAML ignore entries.
     ///
-    /// Matches lines in the format produced by [`save()`]: `  - ID  # comment`.
+    /// Matches `  - ID # comment` with any spacing around `#`, so hand-written
+    /// reasons survive a rewrite by [`save()`].
     fn parse_ignore_comments(yaml: &str) -> HashMap<String, String> {
         yaml.lines()
             .filter_map(|line| {
                 let trimmed = line.trim();
                 let entry = trimmed.strip_prefix("- ")?;
-                let (id, comment) = entry.split_once("  # ")?;
-                Some((id.trim().to_string(), comment.to_string()))
+                // YAML needs whitespace before `#` for it to start a comment.
+                let (id, comment) = entry.split_once(" #")?;
+                Some((id.trim().to_string(), comment.trim().to_string()))
             })
             .collect()
     }
@@ -477,6 +479,17 @@ mod tests {
         assert_eq!(comments.len(), 1);
         assert!(comments.contains_key("GHSA-aaaa-bbbb-cccc"));
         assert!(!comments.contains_key("CVE-2020-1234"));
+    }
+
+    #[test]
+    fn parse_ignore_comments_accepts_single_space() {
+        let yaml = "---\nignore:\n  - CVE-2020-1234 # patched by Rails LTS\n  - GHSA-aaaa-bbbb-cccc #no space\n";
+        let comments = Configuration::parse_ignore_comments(yaml);
+        assert_eq!(
+            comments.get("CVE-2020-1234").unwrap(),
+            "patched by Rails LTS"
+        );
+        assert_eq!(comments.get("GHSA-aaaa-bbbb-cccc").unwrap(), "no space");
     }
 
     #[test]

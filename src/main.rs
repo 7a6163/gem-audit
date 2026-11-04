@@ -290,8 +290,9 @@ fn write_ignore_list(
     let merged_ignore: HashSet<String> = config.ignore.union(&new_ids).cloned().collect();
 
     let mut merged_comments = config.ignore_comments.clone();
+    // Existing comments win: they may hold a hand-written reason for the ignore.
     for (id, comment) in new_comments {
-        merged_comments.insert(id, comment);
+        merged_comments.entry(id).or_insert(comment);
     }
 
     let updated_config = Configuration {
