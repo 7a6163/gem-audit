@@ -1,3 +1,13 @@
+### Unreleased
+
+#### Fixed
+
+* **Ignore reasons are no longer lost.** A comment written as `- ID # reason`
+  (one space before `#`) was dropped the next time `--write-ignore` rewrote the
+  config, and running `--write-ignore` together with `--ignore` replaced every
+  hand-written reason with a generated description. Existing comments are now
+  kept, and the README documents commenting ignore entries.
+
 ### 2.12.0 / 2026-11-02
 
 #### Added

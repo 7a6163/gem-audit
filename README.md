@@ -279,6 +279,20 @@ max_db_age_days: 7
 * `ignore:` \[Array\<String\>\] - Advisory IDs to ignore (CVE, GHSA, or OSVDB).
 * `max_db_age_days:` \[Integer\] - Warn if the database is older than this many days. CLI `--max-db-age` overrides this value.
 
+Record why an advisory is ignored with a `#` comment after its ID, so
+collaborators reading the file know the reason:
+
+```yaml
+---
+ignore:
+  - CVE-2020-1234  # patched by Rails LTS (rails 4.2.11.46)
+  - GHSA-xxxx-yyyy-zzzz  # not reachable: we never call the affected API
+```
+
+`--write-ignore` keeps existing comments and only writes a generated
+description (gem, version, criticality, title) for newly added IDs. When an
+entry is removed, its reason stays in the file's git history.
+
 The legacy `.bundler-audit.yml` file name is also supported for backward
 compatibility.
 

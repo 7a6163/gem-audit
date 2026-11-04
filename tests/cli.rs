@@ -784,6 +784,48 @@ fn check_write_ignore_merges_existing() {
 }
 
 #[test]
+fn check_write_ignore_keeps_hand_written_reasons() {
+    let tmp = std::env::temp_dir().join("gem_audit_test_write_ignore_reasons");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    let config_path = tmp.join(".gem-audit.yml");
+    std::fs::write(
+        &config_path,
+        "---\nignore:\n  - CVE-2021-31810 # patched by Rails LTS\n",
+    )
+    .unwrap();
+
+    // CLI --ignore replaces the config list, so the config's ID is reported again.
+    Command::cargo_bin("gem-audit")
+        .unwrap()
+        .args([
+            "check",
+            "--write-ignore",
+            "--database",
+            mock_db().to_str().unwrap(),
+            "--gemfile-lock",
+            fixtures_dir()
+                .join("vulnerable_ruby/Gemfile.lock")
+                .to_str()
+                .unwrap(),
+            "--config",
+            config_path.to_str().unwrap(),
+            "--ignore=CVE-NONE",
+        ])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        content.contains("  - CVE-2021-31810  # patched by Rails LTS\n"),
+        "{content}"
+    );
+
+    std::fs::remove_dir_all(&tmp).unwrap();
+}
+
+#[test]
 fn check_write_ignore_still_fails_on_insecure_sources() {
     let tmp = tempfile::tempdir().unwrap();
     let config_path = tmp.path().join(".gem-audit.yml");
